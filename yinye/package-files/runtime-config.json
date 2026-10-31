@@ -1,0 +1,7 @@
+{
+  "mode": "portable-release",
+  "pythonExecutable": "python/runtime/python.exe",
+  "dependencyRoot": "python/packages",
+  "ocrModule": "ocr-service/manager.cjs",
+  "allowTestRun": false
+}

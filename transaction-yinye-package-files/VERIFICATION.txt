@@ -1,0 +1,59 @@
+﻿YINYE PACKAGE FILES UPLOAD VERIFICATION
+
+Changed branch/field:
+- main :: yinye/package-files/
+
+Four artifact paths:
+- MODIFIED_FILE: D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-files-20261031-234148/transaction-yinye-package-files/MODIFIED_FILE.md
+- DIFF_FILE: D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-files-20261031-234148/transaction-yinye-package-files/DIFF_FILE.patch
+- VERIFICATION: D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-files-20261031-234148/transaction-yinye-package-files/VERIFICATION.txt
+- ROLLBACK: D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-files-20261031-234148/transaction-yinye-package-files/ROLLBACK.sh
+
+Original remote HEAD:
+e32499b64261f1478f3bff41ed6d044cdad9ebd6
+
+Uploaded source hashes:
+- PACKAGE-MANIFEST.json | 494454 bytes | 377DD982B22A845545D04E102E64AC3A6B053FE9F5E22EEBE08F69D40476B45F
+- runtime-config.json | 190 bytes | 3A35CF8BE40A08A8D1435D6ADDDA9B92B6CE2E99D158AFCF03D9028FACA4CDF1
+- unins000.dat | 548033 bytes | 3A24F7BF8EDC5CAE123FE86E23D842A9B806126F0528E1C83838B10105D54B8F
+- unins000.exe | 4449782 bytes | E1A173B100ED6BB39B04C301B1C31476CFBE4CD664DA5D546C1F69DE59B587FB
+- 使用说明.txt | 43172 bytes | DFE5AB43AE3140E58C7EE78C21B2B945C175C8EC5C17A0390CCA9336C7A27A30
+- 隐页.exe | 122880 bytes | 26B3F1FB2A4A32C247258E3ADF54DE24C20A34AEDB7F23F3E2A6494F3C57F803
+
+BASELINE
+Command:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-files-20261031-234148/transaction-yinye-package-files/probe-yinye-package-files.ps1 -Root D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-baseline-20261031-234148
+Input:
+original main tree at e32499b64261f1478f3bff41ed6d044cdad9ebd6
+Literal output:
+YINYE_PACKAGE_PROBE 0/6 root=D:\360安全浏览器下载\UCODE\caiwugongzuotai-yinye-baseline-20261031-234148 failed=PACKAGE-MANIFEST.json:missing,runtime-config.json:missing,unins000.dat:missing,unins000.exe:missing,使用说明.txt:missing,隐页.exe:missing
+Exit status: 1 (expected)
+Result: the six requested files were absent.
+
+MODIFIED
+Command:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-files-20261031-234148/transaction-yinye-package-files/probe-yinye-package-files.ps1 -Root D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-files-20261031-234148
+Input:
+working copy with the six requested source files copied byte-for-byte
+Literal output:
+YINYE_PACKAGE_PROBE 6/6 root=D:\360安全浏览器下载\UCODE\caiwugongzuotai-yinye-files-20261031-234148 failed=none
+Exit status: 0
+Result: all six files exist and match their source SHA256 values.
+
+ROLLBACK
+Command:
+D:/360Downloads/Git/bin/bash.exe D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-rollback-test-20261031-234148/transaction-yinye-package-files/ROLLBACK.sh D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-rollback-test-20261031-234148 --local
+Input:
+separate clone containing the modified upload commit
+Literal output:
+HEAD is now at e32499b Record release verification and rollback evidence
+ROLLBACK_OK mode=local root=D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-rollback-test-20261031-234148 head=e32499b64261f1478f3bff41ed6d044cdad9ebd6
+Exit status: 0
+
+Rollback verification command:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-files-20261031-234148/transaction-yinye-package-files/probe-yinye-package-files.ps1 -Root D:/360安全浏览器下载/UCODE/caiwugongzuotai-yinye-rollback-test-20261031-234148
+Literal output:
+YINYE_PACKAGE_PROBE 0/6 root=D:\360安全浏览器下载\UCODE\caiwugongzuotai-yinye-rollback-test-20261031-234148 failed=PACKAGE-MANIFEST.json:missing,runtime-config.json:missing,unins000.dat:missing,unins000.exe:missing,使用说明.txt:missing,隐页.exe:missing
+Exit status: 1 (expected)
+Restored behavior/status:
+rollback clone HEAD equals e32499b64261f1478f3bff41ed6d044cdad9ebd6 and the six added files are absent; the modified working copy remains changed.
