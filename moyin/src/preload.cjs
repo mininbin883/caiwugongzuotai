@@ -19,7 +19,7 @@ contextBridge.exposeInMainWorld('veilforge', Object.freeze({
   cancelBatchExport: () => ipcRenderer.invoke('veilforge:batch-export-cancel'),
   exportResult: (payload) => ipcRenderer.invoke('veilforge:export', payload),
   correctOcr: (token, pageNumber, corrections) => ipcRenderer.invoke('veilforge:ocr-correct', { token, pageNumber, corrections }),
-  restoreOffice: (mapping) => ipcRenderer.invoke('veilforge:office-restore', { mapping }),
+  restoreOffice: (mapping, sentText) => ipcRenderer.invoke('veilforge:office-restore', { mapping, sentText }),
   createVault: (password) => ipcRenderer.invoke('veilforge:vault-create', { password }),
   openVault: (password) => ipcRenderer.invoke('veilforge:vault-open', { password }),
   saveVaultEntry: (payload) => ipcRenderer.invoke('veilforge:vault-save', payload),

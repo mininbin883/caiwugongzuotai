@@ -1,3 +1,5 @@
+import { collectSecrets, collectSpacedNames, collectRepeatedValues } from './secret-name-rules.mjs';
+
 export const TYPE_LABELS = Object.freeze({
   company: '公司名称',
   person: '姓名',
@@ -9,6 +11,7 @@ export const TYPE_LABELS = Object.freeze({
   bankcard: '银行卡号',
   address: '地址',
   ipv4: 'IPv4 地址',
+  secret: '密码/密钥',
   custom: '自定义词'
 });
 
@@ -85,6 +88,7 @@ function maskValue(type, value, style) {
       return `${digits.slice(0, 4)} **** **** ${digits.slice(-4)}`;
     }
     case 'ipv4': return value.split('.').map((part, index) => index === 0 ? part : '***').join('.');
+    case 'secret': return '*'.repeat(Math.min(12, Math.max(6, value.length)));
     case 'landline': return `${value.slice(0, 4)}****${value.slice(-2)}`;
     case 'address': {
       const visiblePrefix = Math.min(6, Math.max(2, Math.floor(value.length / 2)));
@@ -135,7 +139,27 @@ function protectedIntervals(text, terms) {
 }
 
 function outsideProtected(findings, protectedRanges) {
-  return findings.filter((finding) => !protectedRanges.some((range) => finding.start < range.end && range.start < finding.end));
+  if (!protectedRanges.length) return findings;
+  // 先合并重叠的保护区间，保证终点单调递增，二分查找才成立。
+  const ranges = [];
+  for (const range of protectedRanges.slice().sort((left, right) => left.start - right.start)) {
+    const last = ranges[ranges.length - 1];
+    if (last && range.start <= last.end) last.end = Math.max(last.end, range.end);
+    else ranges.push({ start: range.start, end: range.end });
+  }
+  return findings.filter((finding) => {
+    // 二分查找第一个终点大于候选起点的保护区间。
+    let low = 0;
+    let high = ranges.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (ranges[middle].end <= finding.start) low = middle + 1; else high = middle;
+    }
+    for (let index = low; index < ranges.length && ranges[index].start < finding.end; index += 1) {
+      if (finding.start < ranges[index].end) return false;
+    }
+    return true;
+  });
 }
 
 function normalizeExternalFindings(text, values, enabledTypes) {
@@ -163,21 +187,38 @@ function normalizeExternalFindings(text, values, enabledTypes) {
 }
 
 function removeOverlaps(findings) {
-  const priority = { uscc: 100, idcard: 90, bankcard: 80, mobile: 70, landline: 60, email: 50, ipv4: 45, company: 40, person: 35, address: 30, custom: 20 };
+  const priority = { secret: 110, uscc: 100, idcard: 90, bankcard: 80, mobile: 70, landline: 60, email: 50, ipv4: 45, company: 40, person: 35, address: 30, custom: 20 };
   const sorted = findings.slice().sort((a, b) => a.start - b.start || (priority[b.type] - priority[a.type]) || (b.end - b.start) - (a.end - a.start));
+  // 按起点排序后，只需与已接受候选的最大终点比较即可判断重叠（线性复杂度）。
   const accepted = [];
+  let maxEnd = -1;
   for (const finding of sorted) {
-    if (!accepted.some((item) => finding.start < item.end && item.start < finding.end)) accepted.push(finding);
+    if (finding.start >= maxEnd) {
+      accepted.push(finding);
+      maxEnd = finding.end;
+    }
   }
   return accepted.sort((a, b) => a.start - b.start || a.end - b.end);
 }
 
 export function applyFindings(text, findings) {
-  let output = String(text || '');
-  for (const finding of findings.filter((item) => item.enabled !== false).slice().sort((a, b) => b.start - a.start)) {
-    output = `${output.slice(0, finding.start)}${finding.replacement}${output.slice(finding.end)}`;
+  // 一次拼接，避免每个候选都复制整段正文（候选多时是平方复杂度）。重叠候选沿用原逻辑：起点靠后的先替换。
+  const source = String(text || '');
+  const active = findings.filter((item) => item.enabled !== false).slice().sort((a, b) => a.start - b.start || a.end - b.end);
+  const hasOverlap = active.some((item, index) => index > 0 && item.start < active[index - 1].end);
+  if (hasOverlap) {
+    let output = source;
+    for (const finding of active.slice().reverse()) output = `${output.slice(0, finding.start)}${finding.replacement}${output.slice(finding.end)}`;
+    return output;
   }
-  return output;
+  const parts = [];
+  let cursor = 0;
+  for (const finding of active) {
+    parts.push(source.slice(cursor, finding.start), finding.replacement);
+    cursor = finding.end;
+  }
+  parts.push(source.slice(cursor));
+  return parts.join('');
 }
 
 export function analyzeText(input, options = {}) {
@@ -194,6 +235,9 @@ export function analyzeText(input, options = {}) {
     findings.push(...collectGroupRegex(text, 'person', /(?:姓名|客户)[：:][ \t]*([\p{Script=Han}·]{2,4})(?![\p{Script=Han}·])/gu));
     findings.push(...collectGroupRegex(text, 'person', /(?<![\p{Script=Han}·])([\p{Script=Han}·]{2,4})(?:先生|女士|律师|教授|博士)(?![\p{Script=Han}·])/gu));
   }
+
+  if (enabledTypes.has('person')) findings.push(...collectSpacedNames(text));
+  if (enabledTypes.has('secret')) findings.push(...collectSecrets(text));
 
   if (enabledTypes.has('email')) findings.push(...collectRegex(text, 'email', /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu));
   if (enabledTypes.has('idcard')) findings.push(...collectRegex(text, 'idcard', /(?<!\d)\d{17}[\dXx](?!\d)/gu, idCardValid));
@@ -216,6 +260,7 @@ export function analyzeText(input, options = {}) {
   }
 
   findings.push(...normalizeExternalFindings(text, options.externalFindings, enabledTypes));
+  if (options.propagateRepeats !== false) findings.push(...collectRepeatedValues(text, findings));
 
   const protectedRanges = protectedIntervals(text, options.alwaysKeepTerms);
   const normalized = removeOverlaps(outsideProtected(findings, protectedRanges)).map((finding, index) => ({
@@ -226,6 +271,7 @@ export function analyzeText(input, options = {}) {
     source: finding.source || 'rule',
     confidence: Number.isFinite(finding.confidence) ? finding.confidence : 1,
     reviewRequired: Boolean(finding.reviewRequired),
+    ...(finding.hint ? { hint: finding.hint } : {}),
     enabled: finding.enabled !== false
   }));
   const counts = {};

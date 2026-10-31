@@ -271,3 +271,17 @@ h1, h2, p { margin-top: 0; }
   .workspace { grid-template-columns: 250px minmax(0,1fr); }
   .main-panel { padding-left: 25px; padding-right: 25px; }
 }
+
+/* 导出前残留检查与逆脱敏核对单 */
+.audit-box { margin: 8px 0; padding: 10px 12px; border: 1px solid #d5a75b; background: #fff8e7; border-radius: 8px; font-size: 12px; }
+.audit-box strong { display: block; margin-bottom: 6px; color: #7a4d10; }
+.audit-row, .checklist-row { display: flex; gap: 8px; align-items: center; padding: 3px 0; flex-wrap: wrap; }
+.audit-row code, .checklist-row code { background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 4px; }
+.audit-row .muted, .checklist-row .muted { color: var(--muted); }
+.mini-button { border: 1px solid var(--line, #ccc); background: #fff; border-radius: 6px; padding: 1px 8px; font-size: 11px; cursor: pointer; }
+.restore-checklist { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line, #ddd); border-radius: 8px; font-size: 12px; max-height: 280px; overflow: auto; }
+.restore-checklist h3 { margin: 8px 0 4px; font-size: 12px; }
+.restore-checklist h3:first-child { margin-top: 0; }
+.restore-checklist .warn { color: #8a3f35; }
+.restore-confirm { font-size: 11px; display: flex; gap: 4px; align-items: center; }
+.finding-hint { font-size: 10px; color: #7a4d10; background: #fff3d6; border-radius: 4px; padding: 0 4px; }

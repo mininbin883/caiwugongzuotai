@@ -887,6 +887,12 @@ function loadRedactionEngine() {
   return redactionEnginePromise;
 }
 
+let restoreReviewEnginePromise;
+function loadRestoreReviewEngine() {
+  restoreReviewEnginePromise ||= import('./core/restore-review.mjs');
+  return restoreReviewEnginePromise;
+}
+
 function loadReversibleEngine() {
   reversibleEnginePromise ||= import('./core/reversible-token-engine.mjs');
   return reversibleEnginePromise;
@@ -1142,7 +1148,21 @@ async function restoreOfficeFromDialog(_event, payload) {
   } else {
     restored = await restoreReversibleOffice(inputPath, mapping, destination.filePath);
   }
-  return { canceled: false, path: destination.filePath, ...restored };
+  const review = await reviewReturnedDocument(inputPath, payload?.sentText, mapping);
+  const complete = Boolean(restored.complete) && !(review?.requiresReview);
+  return { canceled: false, path: destination.filePath, ...restored, complete, review };
+}
+
+// 原格式逆脱敏的语义核对：从 AI 返回的文档抽取文字，与当初发出的代号副本逐句比较。
+async function reviewReturnedDocument(inputPath, sentText, mapping) {
+  if (typeof sentText !== 'string' || !sentText || sentText.length > 2_000_000 || !Array.isArray(mapping)) return null;
+  try {
+    const returned = await extractDocument(inputPath);
+    const { reviewRestoration } = await loadRestoreReviewEngine();
+    return reviewRestoration({ sentText, returnedText: returned.text, mapping });
+  } catch {
+    return null;
+  }
 }
 
 function hardenSession(ses) {

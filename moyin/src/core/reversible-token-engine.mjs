@@ -21,6 +21,8 @@ export function tokenizeFindings(text, findings, options = {}) {
   if (!/^[A-F0-9]{8}$/u.test(nonce)) throw new Error('REVERSIBLE_NONCE_INVALID');
   const active = normalizedFindings(findings, source.length);
   const mappingByKey = new Map();
+  let existingTokens = null;
+  let serial = 0;
   const mapping = [];
   const replacements = [];
 
@@ -30,9 +32,13 @@ export function tokenizeFindings(text, findings, options = {}) {
     let entry = mappingByKey.get(key);
     if (!entry) {
       let token;
+      // 原文里已有的代号形字符串只扫描一次，避免每个映射都全文查找。
+      existingTokens ||= new Set(source.match(TOKEN_SCAN_PATTERN) || []);
+      // 原实现在冲突时会反复生成同一个代号而死循环；这里跳到下一个编号。
       do {
-        token = `[MI_${nonce}_${(mapping.length + 1).toString(36).toUpperCase().padStart(3, '0')}]`;
-      } while (source.includes(token));
+        serial += 1;
+        token = `[MI_${nonce}_${serial.toString(36).toUpperCase().padStart(3, '0')}]`;
+      } while (existingTokens.has(token));
       entry = {
         token,
         value,
@@ -47,9 +53,23 @@ export function tokenizeFindings(text, findings, options = {}) {
     replacements.push({ start: finding.start, end: finding.end, token: entry.token });
   }
 
-  let tokenizedText = source;
-  for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
-    tokenizedText = `${tokenizedText.slice(0, replacement.start)}${replacement.token}${tokenizedText.slice(replacement.end)}`;
+  // 一次拼接；存在重叠时沿用逐个替换（起点靠后的先替换）。
+  replacements.sort((left, right) => left.start - right.start || left.end - right.end);
+  let tokenizedText;
+  if (replacements.some((item, index) => index > 0 && item.start < replacements[index - 1].end)) {
+    tokenizedText = source;
+    for (const replacement of replacements.slice().reverse()) {
+      tokenizedText = `${tokenizedText.slice(0, replacement.start)}${replacement.token}${tokenizedText.slice(replacement.end)}`;
+    }
+  } else {
+    const parts = [];
+    let cursor = 0;
+    for (const replacement of replacements) {
+      parts.push(source.slice(cursor, replacement.start), replacement.token);
+      cursor = replacement.end;
+    }
+    parts.push(source.slice(cursor));
+    tokenizedText = parts.join('');
   }
   return {
     nonce,
@@ -60,33 +80,30 @@ export function tokenizeFindings(text, findings, options = {}) {
   };
 }
 
-function countToken(text, token) {
-  return text.split(token).length - 1;
-}
-
 export function restoreTokens(input, mapping, options = {}) {
   const source = String(input || '');
   const mode = options.mode === 'rewrite' ? 'rewrite' : 'analysis';
   const entries = Array.isArray(mapping) ? mapping : [];
-  const known = new Set();
+  const known = new Map();
   const missing = [];
   const repeated = [];
-  let restoredText = source;
-  let restoredCount = 0;
 
+  // 单次扫描统计每个代号出现次数，再单次替换；不会把换回的原文再当作代号处理。
+  const counts = new Map();
+  for (const match of source.matchAll(TOKEN_SCAN_PATTERN)) counts.set(match[0], (counts.get(match[0]) || 0) + 1);
+
+  let restoredCount = 0;
   for (const entry of entries) {
     const token = String(entry?.token || '');
     const value = String(entry?.value ?? '');
     if (!TOKEN_PATTERN.test(token) || known.has(token)) throw new Error('REVERSIBLE_MAPPING_INVALID');
-    known.add(token);
-    const count = countToken(source, token);
+    known.set(token, value);
+    const count = counts.get(token) || 0;
     if (!count) missing.push({ token, type: String(entry.type || 'custom'), label: String(entry.label || entry.type || '自定义') });
     if (count > Number(entry.occurrences || 1)) repeated.push({ token, expected: Number(entry.occurrences || 1), actual: count });
-    if (count) {
-      restoredText = restoredText.split(token).join(value);
-      restoredCount += count;
-    }
+    restoredCount += count;
   }
+  const restoredText = source.replace(TOKEN_SCAN_PATTERN, (token) => (known.has(token) ? known.get(token) : token));
 
   const unknownTokens = [...new Set(source.match(TOKEN_SCAN_PATTERN) || [])].filter((token) => !known.has(token));
   const requiresReview = unknownTokens.length > 0 || (mode === 'rewrite' && missing.length > 0);

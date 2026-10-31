@@ -319,8 +319,10 @@
               <textarea id="restoreOutput" spellcheck="false" readonly></textarea>
             </label>
           </div>
+          <div id="restoreChecklist" class="restore-checklist hidden" aria-live="polite"></div>
           <div class="restore-actions">
             <div id="restoreReport" class="restore-report">载入可逆仓库记录后开始。</div>
+            <label id="restoreConfirmLabel" class="restore-confirm hidden"><input id="restoreConfirm" type="checkbox"> 我已逐项核对上面的核对单</label>
             <button id="restoreButton" class="button button-dark">开始逆脱敏</button>
             <button id="restoreExportButton" class="button button-accent" disabled>导出逆脱敏文本</button>
             <button id="restoreOfficeButton" class="button button-ghost">原格式恢复 DOCX/XLSX/PDF/CSV</button>
@@ -342,6 +344,7 @@
               <button id="exportTextButton" class="button button-accent">导出脱敏文本</button>
             </div>
           </div>
+          <div id="exportAuditBox" class="audit-box hidden" role="status" aria-live="polite"></div>
           <div id="findingList" class="finding-list"></div>
         </section>
       </section>

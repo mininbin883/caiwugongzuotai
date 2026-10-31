@@ -1,5 +1,7 @@
 import { TYPE_LABELS, analyzeText, applyFindings } from '../core/redaction-engine.mjs';
 import { createTokenNonce, restoreTokens, tokenizeFindings } from '../core/reversible-token-engine.mjs';
+import { auditBeforeExport, auditItemToFinding } from '../core/export-audit.mjs';
+import { reviewRestoration, summarizeReview } from '../core/restore-review.mjs';
 import { demoDocumentResult, workflowSteps } from '../core/workflow-demo.mjs';
 import { MODULE_DEFINITIONS, MODULE_IDS, moduleIdFromHash, nextModuleId, normalizeModuleId } from '../core/navigation-controller.mjs';
 import { autoVaultDecision, createPastedDocument } from '../core/quick-entry-controller.mjs';
@@ -29,6 +31,8 @@ const state = {
   batchExport: null,
   reversibleNonce: createTokenNonce(),
   reversibleCache: null,
+  manualFindings: [],
+  exportAudit: null,
   restoreEntry: null,
   restoreResult: null,
   ner: null,
@@ -61,6 +65,7 @@ const elements = Object.fromEntries([
   'workflowGuide', 'workflowStepImport', 'workflowStepReview', 'workflowStepExport', 'workflowSummary',
   'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
   'restorePanel', 'restoreInput', 'restoreOutput', 'restoreMode', 'restoreButton', 'restoreExportButton', 'restoreOfficeButton', 'restoreReport',
+  'restoreChecklist', 'restoreConfirm', 'restoreConfirmLabel', 'exportAuditBox',
   'nerStatus', 'nerMeta', 'nerThreshold', 'nerSelectButton', 'nerClearButton', 'nerAnalyzeButton',
   'ocrBackendStatus', 'ocrBackendMeta', 'ocrRapidButton', 'ocrTesseractButton', 'exportOcrTextButton',
   'pasteTextDialog', 'pasteTextForm', 'pasteTextName', 'pasteTextInput', 'pasteTextCounter', 'pasteTextError', 'pasteTextCancel'
@@ -488,6 +493,10 @@ function clearRestoreSession() {
   elements.restoreReport.textContent = '仓库已锁定；重新解锁并载入可逆记录后继续。';
   elements.restoreReport.classList.remove('needs-review');
   elements.restoreExportButton.disabled = true;
+  elements.restoreChecklist.replaceChildren();
+  elements.restoreChecklist.classList.add('hidden');
+  elements.restoreConfirm.checked = false;
+  elements.restoreConfirmLabel.classList.add('hidden');
   elements.restorePanel.classList.add('hidden');
   updateModuleBadges();
 }
@@ -593,6 +602,7 @@ const TYPED_TERM_ALIASES = Object.freeze({
   '银行卡': 'bankcard', '银行账号': 'bankcard', 'bankcard': 'bankcard',
   '地址': 'address', 'address': 'address',
   'IPv4': 'ipv4', 'ipv4': 'ipv4',
+  '密码': 'secret', '密钥': 'secret', 'secret': 'secret',
   '自定义': 'custom', 'custom': 'custom'
 });
 
@@ -844,7 +854,7 @@ function renderFindings() {
     badge.textContent = finding.source === 'onnx'
       ? `${finding.label} · ${Math.round(Number(finding.confidence || 0) * 100)}%`
       : finding.label;
-    if (finding.reviewRequired) badge.title = '模型置信度低于自动采纳阈值，请人工复核后勾选';
+    if (finding.reviewRequired) badge.title = finding.source === 'onnx' ? '模型置信度低于自动采纳阈值，请人工复核后勾选' : '位置可能是词的一部分，请人工复核';
     const value = document.createElement('code');
     value.textContent = finding.value;
     const arrow = document.createElement('span');
@@ -854,11 +864,88 @@ function renderFindings() {
     replacement.className = 'replacement';
     replacement.textContent = finding.replacement;
     row.append(checkbox, badge, value, arrow, replacement);
+    if (finding.hint) {
+      const hint = document.createElement('span');
+      hint.className = 'finding-hint';
+      hint.textContent = finding.hint;
+      row.append(hint);
+    }
     elements.findingList.append(row);
   }
 }
 
+function selectSourceRange(start, end) {
+  const editor = elements.sourceEditor;
+  document.querySelector('[data-tab="source"]')?.click();
+  editor.focus();
+  editor.setSelectionRange(start, end);
+  const before = editor.value.slice(0, start).split('\n').length - 1;
+  const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 18;
+  editor.scrollTop = Math.max(0, before * lineHeight - editor.clientHeight / 3);
+}
+
+function renderExportAudit() {
+  const box = elements.exportAuditBox;
+  if (!box) return;
+  box.replaceChildren();
+  if (!state.sourceText || state.restoreEntry) { box.classList.add('hidden'); return; }
+  const audit = auditBeforeExport(state.sourceText, state.findings, { enabledTypes: [...state.enabledTypes] });
+  state.exportAudit = audit;
+  box.classList.toggle('hidden', !audit.total);
+  if (!audit.total) return;
+  const title = document.createElement('strong');
+  title.textContent = `${audit.summary}（不拦导出，请确认是否有意保留）`;
+  box.append(title);
+  for (const item of audit.items.slice(0, 50)) {
+    const row = document.createElement('div');
+    row.className = 'audit-row';
+    const label = document.createElement('span');
+    label.textContent = TYPE_LABELS[item.type] || item.type;
+    const code = document.createElement('code');
+    code.textContent = item.masked;
+    const reason = document.createElement('span');
+    reason.className = 'muted';
+    reason.textContent = item.reasonLabel;
+    const locate = document.createElement('button');
+    locate.type = 'button';
+    locate.className = 'mini-button';
+    locate.textContent = '定位';
+    locate.addEventListener('click', () => selectSourceRange(item.start, item.end));
+    row.append(label, code, reason, locate);
+    if (item.fixable) {
+      const fix = document.createElement('button');
+      fix.type = 'button';
+      fix.className = 'mini-button';
+      fix.textContent = '隐藏这一处';
+      fix.addEventListener('click', () => hideAuditItem(item));
+      row.append(fix);
+    }
+    box.append(row);
+  }
+  if (audit.items.length > 50) {
+    const more = document.createElement('div');
+    more.className = 'muted';
+    more.textContent = `另有 ${audit.items.length - 50} 处未列出`;
+    box.append(more);
+  }
+}
+
+function hideAuditItem(item) {
+  const existing = state.findings.find((finding) => finding.start === item.start && finding.end === item.end);
+  if (existing) {
+    existing.enabled = true;
+    state.reversibleCache = null;
+    renderFindings();
+    refreshPreview();
+    return;
+  }
+  // 人工补选绑定当前原文；重新识别时作为外部候选并入，原文被编辑后自动失效。
+  state.manualFindings.push({ type: item.type, start: item.start, end: item.end, confidence: 1, source: 'audit', sourceText: state.sourceText });
+  runAnalysis();
+}
+
 function refreshPreview() {
+  renderExportAudit();
   elements.redactedEditor.value = redactedText();
   elements.findingCount.textContent = String(state.findings.length);
   elements.enabledCount.textContent = String(state.findings.filter((item) => item.enabled).length);
@@ -876,7 +963,10 @@ function runAnalysis() {
     customTerms: customTerms(),
     typedTerms: typedTerms(),
     alwaysKeepTerms: alwaysKeepTerms(),
-    externalFindings: state.nerText === state.sourceText ? state.nerFindings : []
+    externalFindings: [
+      ...(state.nerText === state.sourceText ? state.nerFindings : []),
+      ...state.manualFindings.filter((item) => item.sourceText === state.sourceText)
+    ]
   });
   state.findings = result.findings.map((item) => ({
     ...item,
@@ -904,6 +994,7 @@ function applyDocumentResult(result, message = '文档已在本机解析完成')
   state.currentPage = 0;
   state.reversibleNonce = createTokenNonce();
   state.reversibleCache = null;
+  state.manualFindings = [];
   state.restoreEntry = null;
   setActiveModule('redact');
   renderWorkflowProgress('review');
@@ -1722,21 +1813,118 @@ window.veilforge.onVaultLocked((detail) => {
   renderVaultState();
   showToast('加密仓库已自动锁定，内存密钥已清除');
 });
+function selectRestoreRange(start, end) {
+  const input = elements.restoreInput;
+  input.focus();
+  input.setSelectionRange(start, end);
+  const before = input.value.slice(0, start).split('\n').length - 1;
+  const lineHeight = parseFloat(getComputedStyle(input).lineHeight) || 18;
+  input.scrollTop = Math.max(0, before * lineHeight - input.clientHeight / 3);
+}
+
+function checklistRow(parts, range) {
+  const row = document.createElement('div');
+  row.className = 'checklist-row';
+  for (const part of parts) {
+    if (typeof part === 'string') row.append(document.createTextNode(part));
+    else {
+      const node = document.createElement(part.tag || 'span');
+      if (part.className) node.className = part.className;
+      node.textContent = part.text;
+      row.append(node);
+    }
+  }
+  if (range) {
+    const locate = document.createElement('button');
+    locate.type = 'button';
+    locate.className = 'mini-button';
+    locate.textContent = '定位';
+    locate.addEventListener('click', () => selectRestoreRange(range.start, range.end));
+    row.append(locate);
+  }
+  return row;
+}
+
+function clipText(text, limit = 60) {
+  const chars = [...String(text)];
+  return chars.length > limit ? `${chars.slice(0, limit).join('')}…` : chars.join('');
+}
+
+function renderRestoreChecklist(review, locatable = true) {
+  const box = elements.restoreChecklist;
+  const row = (parts, range) => checklistRow(parts, locatable ? range : null);
+  box.replaceChildren();
+  const section = (title, warn = false) => {
+    const heading = document.createElement('h3');
+    heading.textContent = title;
+    if (warn) heading.className = 'warn';
+    box.append(heading);
+  };
+  if (review.leakedOriginals.length) {
+    section('AI 直接写出的原文（外部 AI 已经知道这些信息，仅在本机显示）', true);
+    for (const item of review.leakedOriginals) {
+      box.append(row([`${item.label}：`, { tag: 'code', text: item.value }, { className: 'muted', text: ` ${item.count} 处` }], item.positions[0]));
+    }
+  }
+  if (review.changes.length) {
+    section('事实发生变化，需要逐句核对', true);
+    for (const change of review.changes.slice(0, 100)) {
+      const labels = change.diffs.map((diff) => `${diff.label}：${diff.before.join('、') || '无'} → ${diff.after.join('、') || '无'}`).join('；');
+      box.append(row([{ tag: 'code', text: clipText(change.returnedText) }, { className: 'muted', text: labels }], change));
+    }
+  }
+  if (review.damagedTokens.length || review.foreignTokens.length || review.unknownTokens.length) {
+    section('残缺、未知或属于其他文件的代号（不会被猜测换回）', true);
+    for (const item of review.damagedTokens) {
+      box.append(row([{ tag: 'code', text: item.text }, { className: 'muted', text: item.suggestion ? ` 可能是 ${item.suggestion}，请手动改正后重新逆脱敏` : ' 残缺代号' }], item));
+    }
+    for (const item of review.foreignTokens) box.append(row([{ tag: 'code', text: item.token }, { className: 'muted', text: ' 属于其他文件' }], item));
+    for (const item of review.unknownTokens) box.append(row([{ tag: 'code', text: item.token }, { className: 'muted', text: ' 本文件没有这个编号' }], item));
+  }
+  if (review.newContent.length) {
+    section('AI 新写的内容（原副本里找不到对应原句，不判断对错）');
+    for (const item of review.newContent.slice(0, 100)) box.append(row([{ tag: 'code', text: clipText(item.text) }], item));
+  }
+  if (review.reworded.length) {
+    section(`改写了措辞但金额、日期、代号等未变：${review.reworded.length} 句`);
+  }
+  if (review.stats.omittedSentences) {
+    section(`原副本中有 ${review.stats.omittedSentences} 句没有出现在返回内容里（摘要省略的内容不会自动补回）`);
+  }
+  if (review.stats.truncated) section('文本过长，仅比对了前 60,000 句', true);
+  box.classList.toggle('hidden', !box.childElementCount);
+}
+
+function updateRestoreExportState() {
+  const needsConfirm = Boolean(state.restoreResult?.requiresReview);
+  elements.restoreConfirmLabel.classList.toggle('hidden', !needsConfirm);
+  elements.restoreExportButton.disabled = !state.restoreResult?.restoredText || (needsConfirm && !elements.restoreConfirm.checked);
+}
+
+elements.restoreConfirm.addEventListener('change', updateRestoreExportState);
+
 elements.restoreButton.addEventListener('click', () => {
   if (!state.restoreEntry?.mapping) return;
   try {
     const result = restoreTokens(elements.restoreInput.value, state.restoreEntry.mapping, { mode: elements.restoreMode.value });
+    const review = reviewRestoration({ sentText: state.restoreEntry.text, returnedText: elements.restoreInput.value, mapping: state.restoreEntry.mapping });
+    result.review = review;
+    result.requiresReview = result.requiresReview || review.requiresReview;
     state.restoreResult = result;
     elements.restoreOutput.value = result.restoredText;
     const parts = [`已恢复 ${result.restoredCount} 处`];
     if (result.missing.length) parts.push(`未出现代号 ${result.missing.length} 个`);
     if (result.unknownTokens.length) parts.push(`未知代号 ${result.unknownTokens.length} 个`);
     if (result.repeated.length) parts.push(`重复代号 ${result.repeated.length} 个`);
+    const reviewSummary = summarizeReview(review);
+    if (reviewSummary) parts.push(reviewSummary);
     parts.push(result.requiresReview ? '需要人工核对' : '核对通过');
     elements.restoreReport.textContent = parts.join(' · ');
     elements.restoreReport.classList.toggle('needs-review', result.requiresReview);
-    elements.restoreExportButton.disabled = !result.restoredText;
-    showToast(result.requiresReview ? '逆脱敏完成，请核对报告' : '逆脱敏完成，代号已在本机换回');
+    renderRestoreChecklist(review);
+    elements.restoreConfirm.checked = false;
+    updateRestoreExportState();
+    showToast(result.requiresReview ? '逆脱敏完成，请按核对单逐项确认' : '逆脱敏完成，代号已在本机换回');
   } catch (error) {
     showToast(`逆脱敏失败：${error?.message || error}`, 'error');
   }
@@ -1758,13 +1946,21 @@ elements.restoreExportButton.addEventListener('click', async () => {
 elements.restoreOfficeButton.addEventListener('click', async () => {
   if (!state.restoreEntry?.mapping) return;
   try {
-    const result = await window.veilforge.restoreOffice(state.restoreEntry.mapping);
+    const result = await window.veilforge.restoreOffice(state.restoreEntry.mapping, state.restoreEntry.text);
     if (!result || result.canceled) return;
     const notes = [`已恢复 ${result.restoredOccurrences} 处`, `${result.knownTokens} 个映射`];
     if (result.missingTokens.length) notes.push(`缺失 ${result.missingTokens.length} 个`);
     if (result.unknownTokens.length) notes.push(`未知 ${result.unknownTokens.length} 个`);
     if (result.repeatedTokens.length) notes.push(`重复 ${result.repeatedTokens.length} 个`);
-    notes.push(result.complete ? '原格式核对通过' : '需要人工核对');
+    if (result.review) {
+      const reviewSummary = summarizeReview(result.review);
+      if (reviewSummary) notes.push(reviewSummary);
+      renderRestoreChecklist(result.review, false);
+    } else {
+      elements.restoreChecklist.replaceChildren();
+      elements.restoreChecklist.classList.add('hidden');
+    }
+    notes.push(result.complete ? '原格式核对通过' : '已保存，请按核对单逐项检查');
     elements.restoreReport.textContent = notes.join(' · ');
     elements.restoreReport.classList.toggle('needs-review', !result.complete);
     showToast(result.complete ? `原格式逆脱敏完成：${String(result.kind || 'document').toUpperCase()}` : '原格式逆脱敏完成，请核对报告');
