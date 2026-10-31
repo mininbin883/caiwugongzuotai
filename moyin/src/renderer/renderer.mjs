@@ -1,0 +1,1843 @@
+import { TYPE_LABELS, analyzeText, applyFindings } from '../core/redaction-engine.mjs';
+import { createTokenNonce, restoreTokens, tokenizeFindings } from '../core/reversible-token-engine.mjs';
+import { demoDocumentResult, workflowSteps } from '../core/workflow-demo.mjs';
+import { MODULE_DEFINITIONS, MODULE_IDS, moduleIdFromHash, nextModuleId, normalizeModuleId } from '../core/navigation-controller.mjs';
+import { autoVaultDecision, createPastedDocument } from '../core/quick-entry-controller.mjs';
+
+const state = {
+  sourceName: '',
+  sourceText: '',
+  sourceToken: null,
+  vaultAttachmentToken: null,
+  vaultAttachmentFiles: 0,
+  quickEntryMode: null,
+  activeModule: 'redact',
+  workflowStage: 'import',
+  findings: [],
+  style: 'mask',
+  enabledTypes: new Set(Object.keys(TYPE_LABELS)),
+  image: null,
+  imageMappingValid: false,
+  currentPage: 0,
+  vault: null,
+  office: null,
+  officeLongTailReport: null,
+  officeMappingValid: false,
+  csv: null,
+  csvMappingValid: false,
+  batchJobs: new Map(),
+  batchExport: null,
+  reversibleNonce: createTokenNonce(),
+  reversibleCache: null,
+  restoreEntry: null,
+  restoreResult: null,
+  ner: null,
+  nerFindings: [],
+  nerText: '',
+  nerBusy: false,
+  ocrBackend: null,
+  ocrBackendBusy: false,
+  autoSaveToVault: false,
+  batchAutoVault: false,
+  vaultFilters: { query: '', kind: 'all', dateFrom: '', dateTo: '' }
+};
+
+const elements = Object.fromEntries([
+  'openButton', 'emptyOpenButton', 'pasteTextButton', 'imageToTextButton', 'demoButton', 'resetButton', 'emptyState', 'editorState', 'findingsPanel',
+  'sourceEditor', 'redactedEditor', 'documentName', 'documentMeta', 'charCount', 'findingCount',
+  'enabledCount', 'typeList', 'customTerms', 'typedTerms', 'alwaysKeepTerms', 'findingList', 'exportTextButton', 'exportJsonButton',
+  'exportImageButton', 'imagePreview', 'imageCanvas', 'imageElement', 'imageOverlay', 'ocrMeta', 'mappingState', 'toast',
+  'ocrCorrectionPanel', 'ocrCorrectionSummary', 'ocrCorrectionList', 'ocrCorrectionApplyButton',
+  'previewTitle', 'pageControls', 'pagePreviousButton', 'pageNextButton', 'pageIndicator',
+  'vaultStatus', 'vaultLockedActions', 'vaultUnlocked', 'vaultName', 'vaultTimeout', 'vaultSaveButton', 'vaultBundleSaveButton',
+  'vaultCreateButton', 'vaultOpenButton', 'vaultBackupButton', 'vaultImportButton', 'vaultImportPolicy',
+  'vaultRotateButton', 'vaultLockButton', 'vaultCompactButton', 'vaultStorageStats', 'vaultPageSummary',
+  'vaultLoadMoreButton', 'vaultEntryList',
+  'vaultAutoSave', 'vaultSearchInput', 'vaultKindFilter', 'vaultDateFrom', 'vaultDateTo', 'vaultFilterClearButton',
+  'vaultBackupHistory',
+  'vaultPasswordDialog', 'vaultPasswordForm', 'vaultDialogTitle', 'vaultDialogDescription', 'vaultPassword',
+  'vaultConfirmLabel', 'vaultPasswordConfirm', 'vaultDialogError', 'vaultDialogCancel', 'exportOfficeButton', 'exportCsvButton',
+  'pdfPasswordDialog', 'pdfPasswordForm', 'pdfPasswordDescription', 'pdfPassword', 'pdfPasswordError', 'pdfPasswordCancel',
+  'workflowGuide', 'workflowStepImport', 'workflowStepReview', 'workflowStepExport', 'workflowSummary',
+  'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
+  'restorePanel', 'restoreInput', 'restoreOutput', 'restoreMode', 'restoreButton', 'restoreExportButton', 'restoreOfficeButton', 'restoreReport',
+  'nerStatus', 'nerMeta', 'nerThreshold', 'nerSelectButton', 'nerClearButton', 'nerAnalyzeButton',
+  'ocrBackendStatus', 'ocrBackendMeta', 'ocrRapidButton', 'ocrTesseractButton', 'exportOcrTextButton',
+  'pasteTextDialog', 'pasteTextForm', 'pasteTextName', 'pasteTextInput', 'pasteTextCounter', 'pasteTextError', 'pasteTextCancel'
+  , 'moduleNav', 'batchNavCount', 'vaultNavState', 'restoreNavState', 'protectNavState',
+  'moduleSideGuide', 'moduleSideKicker', 'moduleSideTitle', 'moduleSideSteps',
+  'moduleOverview', 'moduleOverviewKicker', 'moduleOverviewTitle', 'moduleOverviewDescription',
+  'moduleOverviewStatus', 'moduleChecklist', 'modulePrimaryAction'
+].map((id) => [id, document.getElementById(id)]));
+
+function updateModuleBadges() {
+  elements.batchNavCount.textContent = String(state.batchJobs.size);
+  elements.vaultNavState.textContent = state.vault ? '已解锁' : '已锁定';
+  elements.restoreNavState.textContent = state.restoreEntry?.mapping ? '映射已就绪' : '等待可逆记录';
+  elements.protectNavState.textContent = String(state.enabledTypes.size);
+}
+
+function renderModuleNavigation() {
+  const active = normalizeModuleId(state.activeModule);
+  const definition = MODULE_DEFINITIONS[active];
+  document.body.dataset.activeModule = active;
+  for (const button of elements.moduleNav.querySelectorAll('[data-module]')) {
+    const selected = button.dataset.module === active;
+    button.classList.toggle('active', selected);
+    if (selected) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+  for (const section of document.querySelectorAll('[data-module-section]')) {
+    const routes = String(section.dataset.moduleSection || '').split(/\s+/u);
+    section.classList.toggle('module-hidden', !routes.includes(active));
+  }
+  for (const section of document.querySelectorAll('[data-redact-view]')) {
+    section.classList.toggle('module-hidden', active !== 'redact');
+  }
+  elements.batchPanel.classList.toggle('module-hidden', active !== 'batch');
+  elements.restorePanel.classList.toggle('module-hidden', active !== 'restore');
+  elements.moduleOverview.classList.toggle('hidden', active === 'redact');
+  elements.moduleOverviewKicker.textContent = definition.kicker;
+  elements.moduleOverviewTitle.textContent = definition.title;
+  elements.moduleOverviewDescription.textContent = definition.description;
+  elements.moduleOverviewStatus.textContent = active === 'batch'
+    ? `${state.batchJobs.size} 个任务 · 本机串行处理`
+    : active === 'vault'
+      ? state.vault ? '仓库已解锁 · 密钥仅在内存' : '仓库已锁定'
+      : active === 'restore'
+        ? state.restoreEntry?.mapping ? `${state.restoreEntry.mapping.length} 个映射已就绪` : '需要先从仓库载入可逆记录'
+        : active === 'protect'
+          ? `${state.enabledTypes.size} 类规则已启用`
+          : definition.status;
+  elements.modulePrimaryAction.textContent = active === 'vault' && state.vault
+    ? '查看仓库记录'
+    : active === 'restore' && state.restoreEntry?.mapping
+      ? '定位到逆脱敏输入'
+      : definition.action;
+  elements.moduleChecklist.replaceChildren(...definition.checklist.map((text) => {
+    const item = document.createElement('li');
+    item.textContent = text;
+    return item;
+  }));
+  elements.moduleSideKicker.textContent = definition.kicker;
+  elements.moduleSideTitle.textContent = definition.label;
+  elements.moduleSideSteps.replaceChildren(...definition.checklist.map((text) => {
+    const item = document.createElement('li');
+    item.textContent = text;
+    return item;
+  }));
+  updateModuleBadges();
+}
+
+function setActiveModule(moduleId, { updateHash = true, focus = false } = {}) {
+  const active = normalizeModuleId(moduleId);
+  state.activeModule = active;
+  renderModuleNavigation();
+  const button = elements.moduleNav.querySelector(`[data-module="${active}"]`);
+  if (focus) button?.focus();
+  if (updateHash && window.location.hash !== `#${active}`) history.pushState({ module: active }, '', `#${active}`);
+}
+
+async function runModulePrimaryAction() {
+  switch (state.activeModule) {
+    case 'batch':
+      await pickBatchDocuments();
+      break;
+    case 'vault':
+      if (state.vault) (elements.vaultEntryList.querySelector('button') || elements.vaultSaveButton).focus({ preventScroll: false });
+      else elements.vaultOpenButton.focus({ preventScroll: false });
+      break;
+    case 'restore':
+      if (state.restoreEntry?.mapping) elements.restoreInput.focus({ preventScroll: false });
+      else {
+        setActiveModule('vault');
+        showToast('请打开仓库，并选择一条“可逆”记录');
+      }
+      break;
+    case 'protect':
+      elements.customTerms.focus({ preventScroll: false });
+      break;
+    default:
+      await openDocument();
+  }
+}
+
+function renderWorkflowProgress(stage = state.workflowStage) {
+  state.workflowStage = stage;
+  const nodes = [elements.workflowStepImport, elements.workflowStepReview, elements.workflowStepExport];
+  for (const [index, step] of workflowSteps(stage).entries()) {
+    nodes[index].classList.remove('current', 'done', 'pending');
+    nodes[index].classList.add(step.state);
+    if (step.state === 'current') nodes[index].setAttribute('aria-current', 'step');
+    else nodes[index].removeAttribute('aria-current');
+  }
+  elements.workflowSummary.textContent = stage === 'import'
+    ? '当前：导入文档'
+    : stage === 'review'
+      ? '当前：人工核对'
+      : stage === 'export'
+        ? '当前：导出副本'
+        : '闭环完成';
+}
+
+function loadDemo() {
+  state.style = 'token';
+  elements.customTerms.value = '流光计划';
+  document.querySelectorAll('[data-style]').forEach((item) => item.classList.toggle('active', item.dataset.style === 'token'));
+  applyDocumentResult(demoDocumentResult(), '已载入本地虚构示例，可直接核对并导出');
+}
+
+let vaultDialogResolve = null;
+let vaultDialogNeedsConfirmation = false;
+let pdfPasswordResolve = null;
+
+function showToast(message, kind = 'ok') {
+  elements.toast.textContent = message;
+  elements.toast.dataset.kind = kind;
+  elements.toast.classList.add('visible');
+  window.setTimeout(() => elements.toast.classList.remove('visible'), 3200);
+}
+
+function updatePasteTextCounter() {
+  const value = elements.pasteTextInput.value;
+  const bytes = new TextEncoder().encode(value).byteLength;
+  elements.pasteTextCounter.textContent = `${value.length.toLocaleString('zh-CN')} 字符 · ${bytes.toLocaleString('zh-CN')} bytes`;
+}
+
+function openPasteTextDialog() {
+  elements.pasteTextName.value = '粘贴文字';
+  elements.pasteTextInput.value = '';
+  elements.pasteTextError.textContent = '';
+  updatePasteTextCounter();
+  elements.pasteTextDialog.showModal();
+  window.setTimeout(() => elements.pasteTextInput.focus(), 0);
+}
+
+function closePasteTextDialog() {
+  if (elements.pasteTextDialog.open) elements.pasteTextDialog.close();
+  elements.pasteTextInput.value = '';
+  elements.pasteTextError.textContent = '';
+  updatePasteTextCounter();
+}
+
+function vaultErrorMessage(error) {
+  const message = String(error?.message || error || '未知错误');
+  if (message.includes('LOCAL_VAULT_PASSWORD_POLICY')) return '密码至少 10 个字符，最多 256 个字符';
+  if (message.includes('LOCAL_VAULT_PASSWORD_OR_INTEGRITY_INVALID')) return '密码错误，或仓库完整性校验失败';
+  if (message.includes('LOCAL_VAULT_SESSION_EXPIRED')) return '仓库已经锁定，请重新打开';
+  if (message.includes('LOCAL_VAULT_IMPORT_CONFLICT')) return '备份中存在重复内容或同名记录；请调整冲突策略';
+  if (message.includes('LOCAL_VAULT_BACKUP_FORMAT_INVALID')) return '所选文件不是墨隐加密备份';
+  if (message.includes('LOCAL_VAULT_IMPORT_POLICY_INVALID')) return '导入冲突策略无效';
+  if (message.includes('EEXIST')) return '目标仓库已经存在，请选择新的文件名';
+  return message;
+}
+
+function requestVaultPassword(mode) {
+  const needsConfirmation = ['create', 'rotate', 'backup'].includes(mode);
+  vaultDialogNeedsConfirmation = needsConfirmation;
+  const titles = {
+    create: '设置仓库密码',
+    rotate: '轮换仓库密码',
+    backup: '设置备份密码',
+    import: '输入备份密码',
+    open: '输入仓库密码'
+  };
+  elements.vaultDialogTitle.textContent = titles[mode] || titles.open;
+  elements.vaultDialogDescription.textContent = ['open', 'import'].includes(mode)
+    ? '密码只在本机内存中用于解密，不会写入文件或发送到网络。'
+    : '使用至少 10 个字符；遗失密码后加密内容不能恢复。';
+  elements.vaultConfirmLabel.classList.toggle('hidden', !needsConfirmation);
+  elements.vaultPasswordConfirm.classList.toggle('hidden', !needsConfirmation);
+  elements.vaultPasswordConfirm.required = needsConfirmation;
+  elements.vaultPassword.autocomplete = ['open', 'import'].includes(mode) ? 'current-password' : 'new-password';
+  elements.vaultPassword.value = '';
+  elements.vaultPasswordConfirm.value = '';
+  elements.vaultDialogError.textContent = '';
+  elements.vaultPasswordDialog.showModal();
+  window.setTimeout(() => elements.vaultPassword.focus(), 0);
+  return new Promise((resolve) => { vaultDialogResolve = resolve; });
+}
+
+function finishVaultPassword(value) {
+  if (elements.vaultPasswordDialog.open) elements.vaultPasswordDialog.close();
+  const resolve = vaultDialogResolve;
+  vaultDialogResolve = null;
+  const password = value || null;
+  elements.vaultPassword.value = '';
+  elements.vaultPasswordConfirm.value = '';
+  resolve?.(password);
+}
+
+function requestPdfPassword(name, error = '') {
+  elements.pdfPasswordDescription.textContent = `${name} 已加密；密码仅在当前导入任务的内存中使用。`;
+  elements.pdfPassword.value = '';
+  elements.pdfPasswordError.textContent = error;
+  elements.pdfPasswordDialog.showModal();
+  window.setTimeout(() => elements.pdfPassword.focus(), 0);
+  return new Promise((resolve) => { pdfPasswordResolve = resolve; });
+}
+
+function finishPdfPassword(value) {
+  if (elements.pdfPasswordDialog.open) elements.pdfPasswordDialog.close();
+  const resolve = pdfPasswordResolve;
+  pdfPasswordResolve = null;
+  const password = value || null;
+  elements.pdfPassword.value = '';
+  resolve?.(password);
+}
+
+function vaultFiltersActive() {
+  const filters = state.vaultFilters;
+  return Boolean(filters.query || filters.kind !== 'all' || filters.dateFrom || filters.dateTo);
+}
+
+function renderVaultBackupHistory() {
+  elements.vaultBackupHistory.replaceChildren();
+  const history = state.vault?.backupHistory || [];
+  if (!history.length) {
+    const empty = document.createElement('div');
+    empty.className = 'vault-entry-empty';
+    empty.textContent = '暂无持久化备份操作';
+    elements.vaultBackupHistory.append(empty);
+    return;
+  }
+  for (const item of history) {
+    const row = document.createElement('div');
+    row.className = 'vault-backup-history-item';
+    const title = document.createElement('strong');
+    title.textContent = `${item.action === 'export' ? '导出' : '导入'} · ${item.name}`;
+    const detail = document.createElement('span');
+    const outcome = item.action === 'export'
+      ? `${item.entries} 条 · ${formatBytes(item.bytes)}`
+      : `新增 ${item.imported} · 跳过 ${item.skipped} · 改名 ${item.renamed}`;
+    detail.textContent = `${new Date(item.at).toLocaleString('zh-CN', { hour12: false })} · ${outcome}`;
+    row.append(title, detail);
+    elements.vaultBackupHistory.append(row);
+  }
+}
+
+async function refreshVaultEntries({ append = false } = {}) {
+  if (!state.vault) return;
+  const token = state.vault.token;
+  const value = await window.veilforge.listVaultEntries(token, {
+    cursor: append ? state.vault.page?.nextCursor : null,
+    pageSize: state.vault.page?.pageSize || 20,
+    filters: state.vaultFilters
+  });
+  if (!state.vault || state.vault.token !== token) return;
+  if (append) {
+    const known = new Set(state.vault.entries.map((entry) => entry.id));
+    state.vault.entries.push(...value.entries.filter((entry) => !known.has(entry.id)));
+  } else {
+    state.vault.entries = value.entries;
+  }
+  state.vault.page = {
+    total: value.total,
+    filteredTotal: value.filteredTotal,
+    pageSize: value.pageSize,
+    nextCursor: value.nextCursor,
+    hasMore: value.hasMore,
+    filters: value.filters
+  };
+  state.vault.backupHistory = value.backupHistory || state.vault.backupHistory || [];
+  state.vault.stats = value.stats;
+  renderVaultState();
+}
+
+function renderVaultState() {
+  const unlocked = Boolean(state.vault);
+  if (!unlocked) {
+    state.autoSaveToVault = false;
+    state.batchAutoVault = false;
+  }
+  elements.vaultLockedActions.classList.toggle('hidden', unlocked);
+  elements.vaultUnlocked.classList.toggle('hidden', !unlocked);
+  elements.vaultStatus.textContent = unlocked ? '已解锁' : '已锁定';
+  elements.vaultStatus.classList.toggle('unlocked', unlocked);
+  elements.vaultAutoSave.disabled = !unlocked;
+  elements.vaultAutoSave.checked = unlocked && state.autoSaveToVault;
+  elements.batchAutoVault.disabled = !unlocked;
+  elements.batchAutoVault.checked = unlocked && state.batchAutoVault;
+  updateModuleBadges();
+  elements.vaultSaveButton.disabled = !unlocked || !state.sourceText || Boolean(state.restoreEntry);
+  elements.vaultSaveButton.textContent = state.restoreEntry
+    ? '当前为已保存的可逆记录'
+    : state.style === 'token' ? '保存可逆副本与映射' : '保存当前脱敏结果';
+  elements.vaultBundleSaveButton.disabled = !unlocked || !state.sourceText || !state.vaultAttachmentToken || Boolean(state.restoreEntry);
+  elements.vaultBundleSaveButton.textContent = state.vaultAttachmentToken
+    ? state.vaultAttachmentFiles > 1 ? '保存原件＋脱敏副本' : '保存导出副本附件'
+    : '导出后可保存原件＋副本';
+  elements.vaultEntryList.replaceChildren();
+  if (!unlocked) return;
+  elements.vaultName.textContent = state.vault.name;
+  elements.vaultTimeout.value = String(state.vault.timeoutMinutes);
+  elements.vaultSearchInput.value = state.vaultFilters.query;
+  elements.vaultKindFilter.value = state.vaultFilters.kind;
+  elements.vaultDateFrom.value = state.vaultFilters.dateFrom;
+  elements.vaultDateTo.value = state.vaultFilters.dateTo;
+  const total = state.vault.page?.total ?? state.vault.entries.length;
+  const filteredTotal = state.vault.page?.filteredTotal ?? total;
+  elements.vaultPageSummary.textContent = vaultFiltersActive()
+    ? `筛选 ${state.vault.entries.length}/${filteredTotal} · 全部 ${total}`
+    : `显示 ${state.vault.entries.length}/${total}`;
+  elements.vaultLoadMoreButton.classList.toggle('hidden', !state.vault.page?.hasMore);
+  elements.vaultCompactButton.disabled = Boolean(state.vault.compacting);
+  const stats = state.vault.stats;
+  elements.vaultStorageStats.textContent = stats
+    ? `${formatBytes(stats.fileBytes)} · 附件 ${stats.attachmentReferences || 0}/${stats.fileBlobs || 0} · 去重 ${stats.deduplicatedReferences || 0} · 可回收 ${formatBytes(stats.reclaimableBytes)}`
+    : '';
+  renderVaultBackupHistory();
+  if (!state.vault.entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'vault-entry-empty';
+    empty.textContent = vaultFiltersActive() ? '没有符合筛选条件的记录' : '仓库尚无内容';
+    elements.vaultEntryList.append(empty);
+    return;
+  }
+  for (const entry of state.vault.entries) {
+    const row = document.createElement('div');
+    row.className = 'vault-entry-row';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'vault-entry';
+    const name = document.createElement('strong');
+    name.textContent = `${entry.fileNumber || 'MI-??????'} · ${entry.name}`;
+    const detail = document.createElement('span');
+    const kindLabel = entry.kind === 'reversible-map' ? `可逆 · ${entry.audit.tokenCount || 0} 个代号` : '脱敏文本';
+    const attachmentCount = entry.attachments?.length || 0;
+    detail.textContent = `${kindLabel} · ${entry.characters.toLocaleString('zh-CN')} 字符 · ${entry.audit.findingCount} 项${attachmentCount ? ` · ${attachmentCount} 个加密附件` : ''}`;
+    button.append(name, detail);
+    button.addEventListener('click', () => loadVaultEntry(entry.id));
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'vault-entry-delete';
+    remove.title = `删除 ${entry.fileNumber}`;
+    remove.setAttribute('aria-label', `删除 ${entry.name}`);
+    remove.textContent = '×';
+    remove.addEventListener('click', () => deleteVaultRecord(entry));
+    const attachmentActions = document.createElement('div');
+    attachmentActions.className = 'vault-attachment-actions';
+    for (const attachment of entry.attachments || []) {
+      const exportButton = document.createElement('button');
+      exportButton.type = 'button';
+      exportButton.className = 'vault-attachment-badge';
+      exportButton.title = `导出 ${attachment.name}`;
+      exportButton.textContent = attachment.role === 'original' ? '原件' : attachment.role === 'redacted-copy' ? '脱敏副本' : '附件';
+      exportButton.addEventListener('click', () => exportStoredAttachment(entry, attachment));
+      attachmentActions.append(exportButton);
+    }
+    row.append(button, attachmentActions, remove);
+    elements.vaultEntryList.append(row);
+  }
+}
+
+async function exportStoredAttachment(entry, attachment) {
+  if (!state.vault) return;
+  try {
+    const result = await window.veilforge.exportVaultAttachment(state.vault.token, entry.id, attachment.blobId);
+    if (result && !result.canceled) showToast(`${attachment.name} 已从加密仓库导出并校验 SHA-256`);
+  } catch (error) {
+    showToast(`附件导出失败：${vaultErrorMessage(error)}`, 'error');
+  }
+}
+
+function applyVaultState(value) {
+  state.vault = {
+    token: value.token,
+    name: value.name,
+    timeoutMinutes: value.timeoutMinutes,
+    entries: value.entries || [],
+    page: value.page || { total: value.entries?.length || 0, filteredTotal: value.entries?.length || 0, nextCursor: null, hasMore: false },
+    backupHistory: value.backupHistory || [],
+    stats: value.stats || null,
+    compacting: false
+  };
+  renderVaultState();
+}
+
+async function applyVaultStateAndFilters(value) {
+  applyVaultState(value);
+  if (vaultFiltersActive()) await refreshVaultEntries();
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MiB`;
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GiB`;
+}
+
+async function deleteVaultRecord(entry) {
+  if (!state.vault || !window.confirm(`确定删除 ${entry.fileNumber} · ${entry.name}？\n删除后可通过“压缩回收空间”清除旧密文块。`)) return;
+  try {
+    const value = await window.veilforge.deleteVaultEntry(state.vault.token, entry.id);
+    if (state.restoreEntry?.id === entry.id) clearRestoreSession();
+    await applyVaultStateAndFilters(value);
+    showToast(`${entry.fileNumber} 已删除；可回收 ${formatBytes(value.stats?.reclaimableBytes)}`);
+  } catch (error) {
+    showToast(`删除失败：${vaultErrorMessage(error)}`, 'error');
+  }
+}
+
+function clearRestoreSession() {
+  state.restoreEntry = null;
+  state.restoreResult = null;
+  elements.restoreInput.value = '';
+  elements.restoreOutput.value = '';
+  elements.restoreReport.textContent = '仓库已锁定；重新解锁并载入可逆记录后继续。';
+  elements.restoreReport.classList.remove('needs-review');
+  elements.restoreExportButton.disabled = true;
+  elements.restorePanel.classList.add('hidden');
+  updateModuleBadges();
+}
+
+async function loadVaultEntry(entryId) {
+  if (!state.vault) return;
+  try {
+    const entry = await window.veilforge.readVaultEntry(state.vault.token, entryId);
+    if (entry.kind === 'reversible-map') {
+      state.restoreEntry = entry;
+      state.restoreResult = null;
+      state.sourceName = entry.name;
+      state.sourceText = entry.text;
+      state.sourceToken = null;
+      state.vaultAttachmentToken = null;
+      state.vaultAttachmentFiles = 0;
+      state.quickEntryMode = null;
+      state.findings = [];
+      state.image = null;
+      state.imageMappingValid = false;
+      state.office = null;
+      state.officeLongTailReport = null;
+      state.officeMappingValid = false;
+      state.csv = null;
+      state.csvMappingValid = false;
+      state.currentPage = 0;
+      elements.documentName.textContent = entry.name;
+      elements.documentMeta.textContent = `VAULT · 可逆代号副本 · ${entry.mapping.length} 个映射`;
+      elements.charCount.textContent = entry.text.length.toLocaleString('zh-CN');
+      elements.emptyState.classList.add('hidden');
+      elements.editorState.classList.remove('hidden');
+      elements.findingsPanel.classList.add('hidden');
+      elements.imagePreview.classList.add('hidden');
+      elements.exportImageButton.classList.add('hidden');
+      elements.exportOfficeButton.classList.add('hidden');
+      elements.exportCsvButton.classList.add('hidden');
+      elements.exportOcrTextButton.classList.add('hidden');
+      elements.sourceEditor.value = entry.text;
+      elements.redactedEditor.value = entry.text;
+      elements.restoreInput.value = entry.text;
+      elements.restoreOutput.value = '';
+      elements.restoreReport.textContent = '粘贴或编辑 AI 返回的含代号文本，然后开始逆脱敏。';
+      elements.restoreReport.classList.remove('needs-review');
+      elements.restoreExportButton.disabled = true;
+      elements.restorePanel.classList.remove('hidden');
+      renderTypes();
+      renderVaultState();
+      setActiveModule('restore');
+      showToast('可逆副本已载入，映射仅在解锁会话中使用');
+      return;
+    }
+    state.restoreEntry = null;
+    state.restoreResult = null;
+    elements.restorePanel.classList.add('hidden');
+    state.sourceName = entry.name;
+    state.sourceText = entry.text;
+    state.sourceToken = null;
+    state.vaultAttachmentToken = null;
+    state.vaultAttachmentFiles = 0;
+    state.quickEntryMode = null;
+    state.reversibleNonce = createTokenNonce();
+    state.reversibleCache = null;
+    state.image = null;
+    state.imageMappingValid = false;
+    state.office = null;
+    state.officeLongTailReport = null;
+    state.officeMappingValid = false;
+    state.csv = null;
+    state.csvMappingValid = false;
+    state.currentPage = 0;
+    elements.documentName.textContent = entry.name;
+    elements.documentMeta.textContent = `VAULT · ${entry.text.length.toLocaleString('zh-CN')} 字符 · 已从加密仓库载入`;
+    elements.charCount.textContent = entry.text.length.toLocaleString('zh-CN');
+    elements.emptyState.classList.add('hidden');
+    elements.editorState.classList.remove('hidden');
+    elements.findingsPanel.classList.remove('hidden');
+    elements.imagePreview.classList.add('hidden');
+    elements.exportImageButton.classList.add('hidden');
+    elements.exportOfficeButton.classList.add('hidden');
+    elements.exportCsvButton.classList.add('hidden');
+    elements.exportOcrTextButton.classList.add('hidden');
+    runAnalysis();
+    renderVaultState();
+    setActiveModule('redact');
+    showToast('已从加密仓库载入脱敏结果');
+  } catch (error) {
+    showToast(`载入失败：${vaultErrorMessage(error)}`, 'error');
+  }
+}
+
+function customTerms() {
+  return elements.customTerms.value.split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean);
+}
+
+const TYPED_TERM_ALIASES = Object.freeze({
+  '公司': 'company', '企业': 'company', 'company': 'company',
+  '姓名': 'person', '人员': 'person', 'person': 'person',
+  '手机': 'mobile', '手机号': 'mobile', 'mobile': 'mobile',
+  '固定电话': 'landline', '电话': 'landline', 'landline': 'landline',
+  '身份证': 'idcard', '身份证号': 'idcard', 'idcard': 'idcard',
+  '信用代码': 'uscc', '统一社会信用代码': 'uscc', 'uscc': 'uscc',
+  '邮箱': 'email', 'email': 'email',
+  '银行卡': 'bankcard', '银行账号': 'bankcard', 'bankcard': 'bankcard',
+  '地址': 'address', 'address': 'address',
+  'IPv4': 'ipv4', 'ipv4': 'ipv4',
+  '自定义': 'custom', 'custom': 'custom'
+});
+
+function typedTerms() {
+  const result = {};
+  for (const line of elements.typedTerms.value.split(/\r?\n/)) {
+    const separator = line.search(/[：:]/u);
+    if (separator < 1) continue;
+    const type = TYPED_TERM_ALIASES[line.slice(0, separator).trim()];
+    const value = line.slice(separator + 1).trim();
+    if (!type || value.length < 2) continue;
+    (result[type] ||= []).push(value);
+  }
+  return result;
+}
+
+function alwaysKeepTerms() {
+  return elements.alwaysKeepTerms.value.split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean);
+}
+
+function clearNerFindings() {
+  state.nerFindings = [];
+  state.nerText = '';
+}
+
+function renderNerState() {
+  const loaded = Boolean(state.ner?.loaded);
+  elements.nerStatus.textContent = state.nerBusy ? '识别中' : loaded ? '已加载' : '未加载';
+  elements.nerStatus.classList.toggle('loaded', loaded);
+  elements.nerStatus.classList.toggle('busy', state.nerBusy);
+  elements.nerSelectButton.disabled = state.nerBusy;
+  elements.nerClearButton.disabled = state.nerBusy || !loaded;
+  elements.nerAnalyzeButton.disabled = state.nerBusy || !loaded || !state.sourceText;
+  elements.nerAnalyzeButton.textContent = state.nerBusy ? '正在本机推理…' : '运行离线语义识别';
+  if (!loaded) {
+    elements.nerMeta.textContent = state.ner?.reason === 'LOCAL_NER_BUNDLED_PACK_MISSING'
+      ? '随包模型未安装；可选择含 model.onnx、vocab.txt 和 config.json 的本机目录。'
+      : '正在校验随包中文模型；也可以选择兼容的本机模型目录。';
+    return;
+  }
+  const size = Number(state.ner.modelBytes || 0) / (1024 * 1024);
+  const verified = state.ner.modelPackVerified ? ` · 固定哈希已校验 · ${state.ner.modelPackId}` : ' · 外部模型目录';
+  elements.nerMeta.textContent = `${state.ner.name || '本地模型'} · ${size.toFixed(1)} MB · ${state.ner.vocabSize || 0} 词 · SHA256 ${String(state.ner.modelSha256 || '').slice(0, 12)}…${verified}`;
+}
+
+async function initializeBundledNer() {
+  if (typeof window.veilforge?.loadBundledNer !== 'function') return;
+  try {
+    state.nerBusy = true;
+    renderNerState();
+    const value = await window.veilforge.loadBundledNer();
+    state.ner = value;
+    if (value?.loaded) showToast(`随包中文模型已校验：${value.modelPackId}`);
+  } catch (error) {
+    state.ner = { loaded: false, reason: String(error?.message || error) };
+    showToast(`随包模型校验失败：${error?.message || error}`, 'error');
+  } finally {
+    state.nerBusy = false;
+    renderNerState();
+  }
+}
+
+function renderOcrBackendState() {
+  const value = state.ocrBackend;
+  const rapid = value?.backend === 'rapidocr-ppocrv6';
+  elements.ocrBackendStatus.textContent = state.ocrBackendBusy ? '检测中' : rapid ? 'RapidOCR' : 'Tesseract';
+  elements.ocrBackendStatus.classList.toggle('loaded', rapid);
+  elements.ocrBackendStatus.classList.toggle('busy', state.ocrBackendBusy);
+  elements.ocrRapidButton.disabled = state.ocrBackendBusy || rapid;
+  elements.ocrTesseractButton.disabled = state.ocrBackendBusy || !rapid;
+  if (!value) {
+    elements.ocrBackendMeta.textContent = '正在校验固定哈希 PP-OCRv6 模型包。';
+  } else if (rapid) {
+    const runtime = value.runtimePack?.id
+      ? ` · 内置运行时 ${value.runtimePack.id} 已校验`
+      : ' · 外部 Python 运行时';
+    elements.ocrBackendMeta.textContent = `${value.modelPack?.id || 'PP-OCRv6'} · 固定哈希已校验${runtime} · Python ${value.runtimePack?.pythonVersion || value.python || ''}`;
+  } else {
+    const pack = value.rapidOcrPack?.id ? ` · 可选包 ${value.rapidOcrPack.id} 已校验` : ' · PP-OCRv6 模型包未安装';
+    elements.ocrBackendMeta.textContent = `当前使用 Tesseract.js${pack}`;
+  }
+}
+
+async function initializeOcrBackend() {
+  try {
+    state.ocrBackendBusy = true;
+    renderOcrBackendState();
+    state.ocrBackend = await window.veilforge.getOcrBackendState();
+  } catch (error) {
+    state.ocrBackend = { backend: 'tesseract', error: String(error?.message || error) };
+  } finally {
+    state.ocrBackendBusy = false;
+    renderOcrBackendState();
+  }
+}
+
+function reversiblePreview() {
+  const enabled = state.findings.filter((item) => item.enabled);
+  const fingerprint = `${state.reversibleNonce}\u0000${state.sourceText}\u0000${enabled.map((item) => `${item.type}:${item.start}:${item.end}`).join('|')}`;
+  if (state.reversibleCache?.fingerprint === fingerprint) return state.reversibleCache.value;
+  const value = tokenizeFindings(state.sourceText, enabled, { nonce: state.reversibleNonce });
+  state.reversibleCache = { fingerprint, value };
+  return value;
+}
+
+function redactedText() {
+  if (state.style === 'token') return reversiblePreview().tokenizedText;
+  return applyFindings(state.sourceText, state.findings);
+}
+
+function currentImagePage() {
+  return state.image?.pages?.[state.currentPage] || null;
+}
+
+function renderImageOverlay() {
+  elements.imageOverlay.replaceChildren();
+  if (!state.image || !state.imageMappingValid) return;
+  const page = currentImagePage();
+  if (!page) return;
+  for (const table of page.gridTables || []) {
+    for (const cell of table.cells || []) {
+      const box = document.createElement('span');
+      box.className = `layout-cell-box ${cell.merged ? 'merged' : ''}`;
+      box.style.left = `${cell.bbox.x0 / page.width * 100}%`;
+      box.style.top = `${cell.bbox.y0 / page.height * 100}%`;
+      box.style.width = `${(cell.bbox.x1 - cell.bbox.x0) / page.width * 100}%`;
+      box.style.height = `${(cell.bbox.y1 - cell.bbox.y0) / page.height * 100}%`;
+      elements.imageOverlay.append(box);
+    }
+  }
+  for (const column of page.columns || []) {
+    const box = document.createElement('span');
+    box.className = 'layout-column-box';
+    box.style.left = `${column.bbox.x0 / page.width * 100}%`;
+    box.style.top = `${column.bbox.y0 / page.height * 100}%`;
+    box.style.width = `${(column.bbox.x1 - column.bbox.x0) / page.width * 100}%`;
+    box.style.height = `${(column.bbox.y1 - column.bbox.y0) / page.height * 100}%`;
+    elements.imageOverlay.append(box);
+  }
+  const seen = new Set();
+  for (const finding of state.findings.filter((item) => item.enabled)) {
+    for (const word of page.words) {
+      if (finding.start >= word.end || word.start >= finding.end) continue;
+      const key = `${word.bbox.x0}:${word.bbox.y0}:${word.bbox.x1}:${word.bbox.y1}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const box = document.createElement('span');
+      box.className = 'redaction-box';
+      box.style.left = `${word.bbox.x0 / page.width * 100}%`;
+      box.style.top = `${word.bbox.y0 / page.height * 100}%`;
+      box.style.width = `${(word.bbox.x1 - word.bbox.x0) / page.width * 100}%`;
+      box.style.height = `${(word.bbox.y1 - word.bbox.y0) / page.height * 100}%`;
+      elements.imageOverlay.append(box);
+    }
+  }
+}
+
+function renderImagePage() {
+  const page = currentImagePage();
+  if (!page) return;
+  elements.imageElement.src = page.previewDataUrl;
+  const details = [page.textMode === 'native' ? '原生文本' : `OCR ${page.confidence}%`, `${page.width}×${page.height}`];
+  if (page.enhancement?.upscaled) details.push(`低分辨率增强 ×${page.enhancement.scale}`);
+  if (page.orientationDetected) details.push(`方向校正 ${page.orientationDegrees}°`);
+  if (page.tableRegions?.length) details.push(`表格 ${page.tableRegions.length} 区`);
+  if (page.gridTables?.length) details.push(`网格 ${page.gridTables.length} 表 / 合并 ${page.gridTables.reduce((sum, table) => sum + table.mergedCells, 0)} 格`);
+  if (page.columns?.length > 1) details.push(`${page.columns.length} 栏阅读顺序`);
+  if (page.recognitionPasses > 1) details.push(`分段重试 ${page.recognitionPasses} 次`);
+  if (page.backend === 'rapidocr-ppocrv6') details.push(`RapidOCR · ${page.modelPack?.id || 'PP-OCRv6'}`);
+  else if (page.backend === 'tesseract') details.push('Tesseract');
+  elements.ocrMeta.textContent = details.join(' · ');
+  elements.pageIndicator.textContent = `${state.currentPage + 1} / ${state.image.pageCount}`;
+  elements.pagePreviousButton.disabled = state.currentPage === 0;
+  elements.pageNextButton.disabled = state.currentPage >= state.image.pageCount - 1;
+  elements.pageControls.classList.toggle('hidden', state.image.pageCount < 2);
+  renderOcrCorrections(page);
+  renderImageOverlay();
+}
+
+function renderOcrCorrections(page) {
+  const corrections = page?.textMode === 'native' ? [] : (page?.corrections || []);
+  elements.ocrCorrectionPanel.classList.toggle('hidden', corrections.length === 0);
+  elements.ocrCorrectionSummary.textContent = `${corrections.length} 项待复核 · 低于 72%`;
+  elements.ocrCorrectionList.replaceChildren();
+  for (const item of corrections) {
+    const row = document.createElement('label');
+    row.className = 'ocr-correction-row';
+    const confidence = document.createElement('span');
+    confidence.textContent = `${Math.round(item.confidence)}%`;
+    const input = document.createElement('input');
+    input.className = 'ocr-correction-input';
+    input.value = item.text;
+    input.dataset.original = item.text;
+    input.dataset.wordIndex = String(item.wordIndex);
+    input.maxLength = 128;
+    input.setAttribute('aria-label', `校正 ${item.text}`);
+    row.append(confidence, input);
+    elements.ocrCorrectionList.append(row);
+  }
+}
+
+function renderTypes() {
+  elements.typeList.replaceChildren();
+  for (const [type, label] of Object.entries(TYPE_LABELS)) {
+    const row = document.createElement('label');
+    row.className = 'type-row';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = state.enabledTypes.has(type);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) state.enabledTypes.add(type); else state.enabledTypes.delete(type);
+      updateModuleBadges();
+      runAnalysis();
+    });
+    const dot = document.createElement('span');
+    dot.className = `type-dot type-${type}`;
+    const name = document.createElement('span');
+    name.textContent = label;
+    const count = document.createElement('b');
+    count.textContent = String(state.findings.filter((item) => item.type === type).length);
+    row.append(checkbox, dot, name, count);
+    elements.typeList.append(row);
+  }
+  updateModuleBadges();
+}
+
+function renderFindings() {
+  elements.findingList.replaceChildren();
+  if (!state.findings.length) {
+    const empty = document.createElement('div');
+    empty.className = 'no-findings';
+    empty.textContent = '当前规则没有发现敏感信息。可以补充自定义词或直接编辑原文。';
+    elements.findingList.append(empty);
+  }
+  for (const finding of state.findings) {
+    const row = document.createElement('div');
+    row.className = `finding-row ${finding.enabled ? '' : 'disabled'} ${finding.reviewRequired ? 'needs-review' : ''}`;
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = finding.enabled;
+    checkbox.setAttribute('aria-label', `处理 ${finding.value}`);
+    checkbox.addEventListener('change', () => {
+      finding.enabled = checkbox.checked;
+      row.classList.toggle('disabled', !finding.enabled);
+      refreshPreview();
+    });
+    const badge = document.createElement('span');
+    badge.className = `finding-badge type-${finding.type}`;
+    badge.textContent = finding.source === 'onnx'
+      ? `${finding.label} · ${Math.round(Number(finding.confidence || 0) * 100)}%`
+      : finding.label;
+    if (finding.reviewRequired) badge.title = '模型置信度低于自动采纳阈值，请人工复核后勾选';
+    const value = document.createElement('code');
+    value.textContent = finding.value;
+    const arrow = document.createElement('span');
+    arrow.className = 'finding-arrow';
+    arrow.textContent = '→';
+    const replacement = document.createElement('code');
+    replacement.className = 'replacement';
+    replacement.textContent = finding.replacement;
+    row.append(checkbox, badge, value, arrow, replacement);
+    elements.findingList.append(row);
+  }
+}
+
+function refreshPreview() {
+  elements.redactedEditor.value = redactedText();
+  elements.findingCount.textContent = String(state.findings.length);
+  elements.enabledCount.textContent = String(state.findings.filter((item) => item.enabled).length);
+  renderTypes();
+  renderImageOverlay();
+  if (state.image?.kind === 'pdf') elements.exportImageButton.textContent = state.style === 'token' ? '导出可逆代号 PDF' : '导出涂黑 PDF';
+  if (state.csv) elements.exportCsvButton.textContent = state.style === 'token' ? '导出可逆代号 CSV' : '导出原格式 CSV';
+}
+
+function runAnalysis() {
+  const previousEnabled = new Map(state.findings.map((item) => [`${item.type}:${item.start}:${item.end}`, item.enabled]));
+  const result = analyzeText(state.sourceText, {
+    style: state.style,
+    enabledTypes: [...state.enabledTypes],
+    customTerms: customTerms(),
+    typedTerms: typedTerms(),
+    alwaysKeepTerms: alwaysKeepTerms(),
+    externalFindings: state.nerText === state.sourceText ? state.nerFindings : []
+  });
+  state.findings = result.findings.map((item) => ({
+    ...item,
+    enabled: previousEnabled.get(`${item.type}:${item.start}:${item.end}`) ?? item.enabled
+  }));
+  elements.sourceEditor.value = state.sourceText;
+  renderFindings();
+  refreshPreview();
+}
+
+function applyDocumentResult(result, message = '文档已在本机解析完成') {
+  state.sourceName = result.name;
+  state.sourceText = result.text;
+  state.sourceToken = result.sourceToken || null;
+  state.vaultAttachmentToken = null;
+  state.vaultAttachmentFiles = 0;
+  state.quickEntryMode = result.quickEntry || null;
+  state.image = result.image || null;
+  state.imageMappingValid = Boolean(result.image);
+  state.office = result.office || null;
+  state.officeLongTailReport = result.officeLongTailReport || result.office?.longTailReport || null;
+  state.officeMappingValid = Boolean(result.office);
+  state.csv = result.csv || null;
+  state.csvMappingValid = Boolean(result.csv);
+  state.currentPage = 0;
+  state.reversibleNonce = createTokenNonce();
+  state.reversibleCache = null;
+  state.restoreEntry = null;
+  setActiveModule('redact');
+  renderWorkflowProgress('review');
+  state.restoreResult = null;
+  clearNerFindings();
+  elements.documentName.textContent = result.name;
+  const pdfFeatures = result.image?.kind === 'pdf' ? result.image.pdfFeatures : null;
+  const structureMeta = pdfFeatures
+    ? ` · 表单 ${pdfFeatures.formFields} · 批注 ${pdfFeatures.annotations} · 字体 ${pdfFeatures.fontResources} · 旋转页 ${pdfFeatures.rotatedPages || 0} · 裁剪页 ${pdfFeatures.croppedPages || 0}`
+    : '';
+  const signatureMeta = pdfFeatures?.signedSignatures
+    ? ` · 已签名 ${pdfFeatures.signedSignatures} 处（导出将使签名失效）`
+    : '';
+  const compatibilityMeta = pdfFeatures
+    ? `${pdfFeatures.pdfaDeclared ? ` · PDF/A-${pdfFeatures.pdfaPart || '?'}${pdfFeatures.pdfaConformance || ''} 声明` : ''}${pdfFeatures.hasXfa ? ' · XFA（保留但未验证）' : ''}`
+    : '';
+  const csvMeta = result.csv
+    ? ` · ${result.csv.encoding.toUpperCase()}${result.csv.bom ? '+BOM' : ''} · ${result.csv.delimiterName}分隔 · ${result.csv.lineEndingName} · ${result.csv.rows} 行 × ${result.csv.columns} 列`
+    : '';
+  const officeReport = state.officeLongTailReport;
+  const officeMeta = officeReport
+    ? ` · 长尾 ${officeReport.detectedFeatures?.length || 0} 项 · 降级 ${officeReport.degradationCount || 0} 项`
+    : '';
+  elements.documentMeta.textContent = `${result.extension.toUpperCase().slice(1)} · ${result.sourceBytes.toLocaleString('zh-CN')} bytes · 本地解析${csvMeta}${structureMeta}${compatibilityMeta}${signatureMeta}${officeMeta}`;
+  elements.charCount.textContent = result.characters.toLocaleString('zh-CN');
+  elements.emptyState.classList.add('hidden');
+  elements.editorState.classList.remove('hidden');
+  elements.findingsPanel.classList.remove('hidden');
+  elements.restorePanel.classList.add('hidden');
+  elements.imagePreview.classList.toggle('hidden', !state.image);
+  elements.exportImageButton.classList.toggle('hidden', !state.image);
+  elements.exportOfficeButton.classList.toggle('hidden', !state.office);
+  elements.exportCsvButton.classList.toggle('hidden', !state.csv);
+  elements.exportOcrTextButton.classList.toggle('hidden', state.quickEntryMode !== 'image-to-text');
+  if (state.office) elements.exportOfficeButton.textContent = `导出原格式 ${state.office.kind.toUpperCase()}`;
+  if (state.csv) {
+    elements.exportCsvButton.disabled = false;
+    elements.exportCsvButton.textContent = state.style === 'token' ? '导出可逆代号 CSV' : '导出原格式 CSV';
+  }
+  if (state.image) {
+    elements.previewTitle.textContent = state.image.kind === 'pdf' ? 'PDF 原版式预览' : '图片原版式预览';
+    elements.exportImageButton.textContent = state.image.kind === 'pdf' ? '导出涂黑 PDF' : '导出涂黑图片';
+    elements.mappingState.textContent = '坐标映射有效';
+    elements.mappingState.classList.remove('stale');
+    renderImagePage();
+  }
+  runAnalysis();
+  renderNerState();
+  renderVaultState();
+  showToast(message);
+}
+
+const BATCH_STATUS = {
+  queued: ['等待中', 'queued'],
+  processing: ['处理中', 'processing'],
+  done: ['已完成', 'done'],
+  failed: ['失败', 'failed'],
+  canceled: ['已取消', 'canceled']
+};
+
+function renderBatchJobs() {
+  const jobs = [...state.batchJobs.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  elements.batchPanel.classList.toggle('hidden', jobs.length === 0);
+  updateModuleBadges();
+  const active = jobs.filter((job) => job.status === 'queued' || job.status === 'processing').length;
+  const done = jobs.filter((job) => job.status === 'done').length;
+  elements.batchSummary.textContent = state.batchExport
+    ? `正在导出 ${state.batchExport.exported || 0}/${state.batchExport.total || done} · ${state.batchExport.failed || 0} 失败`
+    : `${jobs.length} 个任务 · ${active} 进行中 · ${done} 完成`;
+  elements.batchExportButton.textContent = state.batchExport
+    ? state.batchExport.cancelRequested ? '停止中…' : '停止导出'
+    : '批量导出';
+  elements.batchExportButton.disabled = state.batchExport?.cancelRequested || (!state.batchExport && done === 0);
+  elements.batchClearButton.disabled = Boolean(state.batchExport);
+  elements.batchList.replaceChildren();
+  for (const job of jobs) {
+    const row = document.createElement('div');
+    row.className = `batch-row batch-${BATCH_STATUS[job.status]?.[1] || 'queued'}`;
+    const icon = document.createElement('span');
+    icon.className = 'batch-status-dot';
+    const details = document.createElement('div');
+    details.className = 'batch-details';
+    const name = document.createElement('strong');
+    name.textContent = job.name;
+    const meta = document.createElement('span');
+    const resultMeta = job.result ? ` · ${job.result.characters.toLocaleString('zh-CN')} 字符` : '';
+    meta.textContent = `${BATCH_STATUS[job.status]?.[0] || job.status}${resultMeta}${job.error ? ` · ${job.error}` : ''}`;
+    const progress = document.createElement('div');
+    progress.className = 'batch-progress';
+    const progressValue = document.createElement('i');
+    progressValue.style.width = `${job.progress || 0}%`;
+    progress.append(progressValue);
+    details.append(name, meta, progress);
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'button button-small button-ghost';
+    if (job.status === 'done') {
+      action.textContent = '打开复核';
+      action.addEventListener('click', () => openBatchJob(job.id));
+    } else if (job.status === 'queued') {
+      action.textContent = '取消';
+      action.addEventListener('click', () => cancelBatchJob(job.id));
+    } else {
+      action.textContent = BATCH_STATUS[job.status]?.[0] || job.status;
+      action.disabled = true;
+    }
+    row.append(icon, details, action);
+    elements.batchList.append(row);
+  }
+}
+
+async function openBatchJob(id) {
+  try {
+    const result = await window.veilforge.openBatchResult(id);
+    applyDocumentResult(result, '批处理结果已载入，可继续人工复核');
+  } catch (error) {
+    showToast(`载入任务失败：${error?.message || error}`, 'error');
+  }
+}
+
+async function cancelBatchJob(id) {
+  try {
+    const response = await window.veilforge.cancelBatchJob(id);
+    state.batchJobs.set(id, response.job);
+    renderBatchJobs();
+  } catch (error) {
+    showToast(`取消失败：${error?.message || error}`, 'error');
+  }
+}
+
+async function enqueueDroppedFiles(files) {
+  if (!files?.length) return;
+  try {
+    const jobs = await window.veilforge.enqueueDroppedFiles(files);
+    for (const job of jobs) state.batchJobs.set(job.id, job);
+    renderBatchJobs();
+    showToast(`已加入 ${jobs.length} 个后台任务`);
+  } catch (error) {
+    showToast(`批量导入失败：${error?.message || error}`, 'error');
+  }
+}
+
+async function pickBatchDocuments() {
+  try {
+    const jobs = await window.veilforge.pickBatchDocuments();
+    if (!jobs?.length) return;
+    for (const job of jobs) state.batchJobs.set(job.id, job);
+    renderBatchJobs();
+    setActiveModule('batch');
+    showToast(`已选择 ${jobs.length} 个文件，正在本机依次处理`);
+  } catch (error) {
+    showToast(`批量选择失败：${error?.message || error}`, 'error');
+  }
+}
+
+async function openDocument() {
+  try {
+    let result = await window.veilforge.pickDocument();
+    if (!result) return;
+    if (result.passwordRequired) {
+      let error = '';
+      while (result?.passwordRequired) {
+        const password = await requestPdfPassword(result.name, error);
+        if (password === null) return;
+        try {
+          result = await window.veilforge.openEncryptedPdf(result.passwordToken, password);
+        } catch (passwordError) {
+          const message = String(passwordError?.message || passwordError);
+          if (message.includes('LOCAL_PDF_PASSWORD_INVALID')) {
+            error = '密码错误，请重新输入。';
+            continue;
+          }
+          throw passwordError;
+        }
+      }
+    }
+    applyDocumentResult(result);
+  } catch (error) {
+    const message = String(error?.message || error);
+    showToast(`导入失败：${message.includes('LOCAL_PDF_ENCRYPTED') ? 'PDF 已加密，请先输入密码解密后再导入' : message}`, 'error');
+  }
+}
+
+async function openImageToText() {
+  try {
+    const result = await window.veilforge.pickImageForText();
+    if (!result) return;
+    applyDocumentResult(result, '图片文字已在本机识别，可人工校正后导出 TXT');
+  } catch (error) {
+    showToast(`图片转 TXT 失败：${error?.message || error}`, 'error');
+  }
+}
+
+function reset() {
+  state.sourceName = '';
+  state.sourceText = '';
+  state.sourceToken = null;
+  state.vaultAttachmentToken = null;
+  state.vaultAttachmentFiles = 0;
+  state.quickEntryMode = null;
+  state.findings = [];
+  state.image = null;
+  state.imageMappingValid = false;
+  state.office = null;
+  state.officeLongTailReport = null;
+  state.officeMappingValid = false;
+  state.csv = null;
+  state.csvMappingValid = false;
+  state.currentPage = 0;
+  state.reversibleNonce = createTokenNonce();
+  state.reversibleCache = null;
+  state.restoreEntry = null;
+  state.restoreResult = null;
+  setActiveModule('redact');
+  renderWorkflowProgress('import');
+  clearNerFindings();
+  elements.sourceEditor.value = '';
+  elements.redactedEditor.value = '';
+  elements.documentName.textContent = '未导入文档';
+  elements.documentMeta.textContent = '支持文档、图片 OCR 与多页 PDF 涂黑导出';
+  elements.charCount.textContent = '0';
+  elements.findingCount.textContent = '0';
+  elements.enabledCount.textContent = '0';
+  elements.emptyState.classList.remove('hidden');
+  elements.editorState.classList.add('hidden');
+  elements.findingsPanel.classList.add('hidden');
+  elements.imagePreview.classList.add('hidden');
+  elements.exportImageButton.classList.add('hidden');
+  elements.exportOfficeButton.classList.add('hidden');
+  elements.exportCsvButton.classList.add('hidden');
+  elements.exportOcrTextButton.classList.add('hidden');
+  elements.pageControls.classList.add('hidden');
+  elements.restorePanel.classList.add('hidden');
+  renderTypes();
+  renderNerState();
+  renderVaultState();
+}
+
+function currentVaultEntryPayload({ includeAttachments = false } = {}) {
+  const enabled = state.findings.filter((item) => item.enabled);
+  const reversible = state.style === 'token' ? reversiblePreview() : null;
+  return {
+    token: state.vault?.token,
+    kind: reversible ? 'reversible-map' : 'redacted-text',
+    name: `${state.sourceName || '脱敏结果'} · ${reversible ? '可逆副本' : '脱敏'}`,
+    text: reversible?.tokenizedText || redactedText(),
+    mapping: reversible?.mapping,
+    findingCount: enabled.length,
+    findingTypes: enabled.map((item) => item.type),
+    attachmentToken: includeAttachments ? state.vaultAttachmentToken : undefined
+  };
+}
+
+async function saveCurrentToVault({ notify = false, includeAttachments = false } = {}) {
+  if (!state.vault || !state.sourceText || state.restoreEntry) throw new Error('LOCAL_VAULT_SAVE_NOT_READY');
+  const reversible = state.style === 'token';
+  const value = await window.veilforge.saveVaultEntry(currentVaultEntryPayload({ includeAttachments }));
+  if (value.attachmentResult) {
+    state.vaultAttachmentToken = null;
+    state.vaultAttachmentFiles = 0;
+  }
+  await applyVaultStateAndFilters(value);
+  if (notify) {
+    const attachmentMessage = value.attachmentResult
+      ? `，附件 ${value.attachmentResult.files} 个，新密文 ${value.attachmentResult.newBlobs} 个，内容去重 ${value.attachmentResult.deduplicated} 个`
+      : '';
+    showToast(`${reversible ? '可逆代号和映射已加密保存' : '当前脱敏结果已加密保存'}${attachmentMessage}`);
+  }
+  return value;
+}
+
+async function exportResult(kind) {
+  if (!state.sourceText) return;
+  try {
+    const enabled = state.findings.filter((item) => item.enabled);
+    const tokenAssignments = state.style === 'token'
+      ? new Map(reversiblePreview().assignments.map((item) => [`${item.start}:${item.end}`, item.token]))
+      : null;
+    const result = await window.veilforge.exportResult({
+      kind,
+      imageToken: state.image?.token,
+      officeToken: state.office?.token,
+      csvToken: state.csv?.token,
+      sourceToken: state.sourceToken,
+      sourceName: state.sourceName,
+      text: redactedText(),
+      findings: enabled.map(({ type, label, start, end, replacement }) => ({
+        type,
+        label,
+        start,
+        end,
+        replacement: tokenAssignments?.get(`${start}:${end}`) || replacement
+      }))
+    });
+    if (result && !result.canceled) {
+      state.vaultAttachmentToken = result.vaultAttachmentToken || null;
+      state.vaultAttachmentFiles = Number(result.vaultAttachmentFiles || 0);
+      renderVaultState();
+      renderWorkflowProgress('complete');
+      let vaultSuffix = '';
+      let toastKind = 'ok';
+      const autoSave = autoVaultDecision({
+        enabled: state.autoSaveToVault,
+        vault: state.vault,
+        exportResult: result,
+        sourceText: state.sourceText,
+        restoreEntry: state.restoreEntry
+      });
+      if (autoSave.shouldSave) {
+        try {
+          const includeAttachments = Boolean(state.vaultAttachmentToken);
+          const saved = await saveCurrentToVault({ includeAttachments });
+          vaultSuffix = saved.attachmentResult
+            ? `，已自动写入加密仓库（附件 ${saved.attachmentResult.files}，去重 ${saved.attachmentResult.deduplicated}）`
+            : '，已自动写入加密仓库';
+        } catch (error) {
+          vaultSuffix = `，自动入库失败：${vaultErrorMessage(error)}`;
+          toastKind = 'error';
+        }
+      }
+      const suffix = result.coordinatePath ? '，坐标与文本副本已同时保存' : '';
+      const preserved = result.preservationMode === 'structure-preserving-raster' ? '，表单与批注已保留' : '';
+      const geometry = result.rotationsPreserved && result.cropBoxesPreserved ? '，旋转与裁剪框已保留' : '';
+      const pdfa = result.pdfaState === 'declared-source-modified-unvalidated' ? '，PDF/A 声明已保留但需重新校验' : '';
+      const xfa = result.xfaState === 'preserved-unvalidated' ? '，XFA 已保留但需专用阅读器复核' : '';
+      const signature = result.signatureState === 'invalidated-by-modification' ? '，原数字签名已标记失效' : '';
+      const resigning = result.resigning?.required ? `，可交外部签章器重新签名（SHA-256 ${result.resigning.documentSha256.slice(0, 12)}…）` : '';
+      const veraPdf = result.pdfaValidation?.compliant === true
+        ? '，veraPDF 校验通过'
+        : result.pdfaValidation?.compliant === false
+          ? '，veraPDF 校验未通过'
+          : result.pdfaValidation?.reason === 'VERAPDF_NOT_INSTALLED'
+            ? '，未检测到 veraPDF CLI'
+            : '';
+      const csv = result.originalFormatPreserved
+        ? `，CSV ${result.encoding.toUpperCase()} / ${result.delimiterName}分隔 / ${result.lineEndingName} 已保留${result.formulaCellsEscaped ? `，已阻断 ${result.formulaCellsEscaped} 个公式注入单元格` : ''}`
+        : '';
+      showToast(`已导出 ${result.bytes.toLocaleString('zh-CN')} bytes${suffix}${preserved}${geometry}${pdfa}${xfa}${signature}${resigning}${veraPdf}${csv}${vaultSuffix}`, toastKind);
+    }
+  } catch (error) {
+    showToast(`导出失败：${error?.message || error}`, 'error');
+  }
+}
+
+async function exportRecognizedText() {
+  if (!state.sourceText || state.quickEntryMode !== 'image-to-text') return;
+  try {
+    const baseName = state.sourceName.replace(/\.[^.]+$/u, '') || '图片';
+    const result = await window.veilforge.exportResult({
+      kind: 'txt',
+      sourceToken: state.sourceToken,
+      sourceName: state.sourceName,
+      fileNameHint: `${baseName}-识别文本.txt`,
+      text: state.sourceText,
+      findings: []
+    });
+    if (result && !result.canceled) {
+      state.vaultAttachmentToken = result.vaultAttachmentToken || null;
+      state.vaultAttachmentFiles = Number(result.vaultAttachmentFiles || 0);
+      renderVaultState();
+      showToast(`识别文本已导出 ${result.bytes.toLocaleString('zh-CN')} bytes${result.vaultAttachmentFiles ? `，${result.vaultAttachmentFiles} 个文件可加密入库` : ''}`);
+    }
+  } catch (error) {
+    showToast(`导出识别 TXT 失败：${error?.message || error}`, 'error');
+  }
+}
+
+window.veilforge.onBatchUpdate((job) => {
+  state.batchJobs.set(job.id, job);
+  renderBatchJobs();
+});
+
+window.veilforge.onBatchExportProgress((detail) => {
+  state.batchExport = { ...(state.batchExport || {}), ...detail };
+  renderBatchJobs();
+});
+
+window.veilforge.listBatchJobs().then((jobs) => {
+  for (const job of jobs) state.batchJobs.set(job.id, job);
+  renderBatchJobs();
+}).catch(() => {});
+
+for (const button of elements.moduleNav.querySelectorAll('[data-module]')) {
+  button.addEventListener('click', () => setActiveModule(button.dataset.module));
+  button.addEventListener('keydown', (event) => {
+    let direction = null;
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        direction = 'next';
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        direction = 'previous';
+        break;
+      case 'Home':
+        direction = 'first';
+        break;
+      case 'End':
+        direction = 'last';
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    setActiveModule(nextModuleId(state.activeModule, direction), { focus: true });
+  });
+}
+elements.modulePrimaryAction.addEventListener('click', runModulePrimaryAction);
+window.addEventListener('hashchange', () => setActiveModule(moduleIdFromHash(window.location.hash), { updateHash: false }));
+
+document.addEventListener('keydown', (event) => {
+  if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+  const index = Number(event.key) - 1;
+  if (!Number.isInteger(index) || !MODULE_IDS[index]) return;
+  event.preventDefault();
+  setActiveModule(MODULE_IDS[index], { focus: true });
+});
+
+document.addEventListener('dragover', (event) => {
+  if (!Array.from(event.dataTransfer.types || []).includes('Files')) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+  document.body.classList.add('drag-active');
+});
+document.addEventListener('dragleave', (event) => {
+  if (!event.relatedTarget) document.body.classList.remove('drag-active');
+});
+document.addEventListener('drop', (event) => {
+  if (!event.dataTransfer.files?.length) return;
+  event.preventDefault();
+  document.body.classList.remove('drag-active');
+  enqueueDroppedFiles(event.dataTransfer.files);
+});
+
+elements.batchClearButton.addEventListener('click', async () => {
+  try {
+    const response = await window.veilforge.clearBatchJobs();
+    state.batchJobs.clear();
+    for (const job of response.jobs) state.batchJobs.set(job.id, job);
+    renderBatchJobs();
+  } catch (error) {
+    showToast(`清理失败：${error?.message || error}`, 'error');
+  }
+});
+
+elements.batchExportButton.addEventListener('click', async () => {
+  if (state.batchExport) {
+    try {
+      const response = await window.veilforge.cancelBatchExport();
+      if (response.canceled) state.batchExport.cancelRequested = true;
+      renderBatchJobs();
+    } catch (error) {
+      showToast(`停止导出失败：${error?.message || error}`, 'error');
+    }
+    return;
+  }
+  const total = [...state.batchJobs.values()].filter((job) => job.status === 'done').length;
+  state.batchExport = { status: 'starting', total, exported: 0, failed: 0 };
+  renderBatchJobs();
+  try {
+    const result = await window.veilforge.exportCompletedBatch({
+      autoVault: state.batchAutoVault,
+      vaultToken: state.vault?.token || null
+    });
+    if (result.vaultState) await applyVaultStateAndFilters(result.vaultState);
+    const vaultSuffix = state.batchAutoVault
+      ? `，自动入库 ${result.vaultSave?.saved || 0} 个${result.vaultSave?.failed ? `、失败 ${result.vaultSave.failed} 个` : ''}`
+      : '';
+    if (result.canceled && result.exported === 0) showToast(`已取消批量导出${vaultSuffix}`);
+    else if (result.canceled) showToast(`已停止导出：完成 ${result.exported} 个，清单已保存${vaultSuffix}`);
+    else showToast(`批量导出完成：${result.exported} 个，失败 ${result.failed} 个${vaultSuffix}`, result.vaultSave?.failed ? 'error' : 'ok');
+  } catch (error) {
+    showToast(`批量导出失败：${error?.message || error}`, 'error');
+  } finally {
+    state.batchExport = null;
+    renderBatchJobs();
+  }
+});
+
+elements.openButton.addEventListener('click', openDocument);
+elements.emptyOpenButton.addEventListener('click', openDocument);
+elements.pasteTextButton.addEventListener('click', openPasteTextDialog);
+elements.imageToTextButton.addEventListener('click', openImageToText);
+elements.demoButton.addEventListener('click', loadDemo);
+elements.pasteTextInput.addEventListener('input', updatePasteTextCounter);
+elements.pasteTextForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  try {
+    const result = createPastedDocument(elements.pasteTextInput.value, elements.pasteTextName.value);
+    closePasteTextDialog();
+    applyDocumentResult(result, '粘贴文字已载入本地会话，可直接核对敏感信息');
+  } catch (error) {
+    const message = String(error?.message || error);
+    elements.pasteTextError.textContent = message.includes('EMPTY')
+      ? '请先粘贴文字内容'
+      : message.includes('TOO_LARGE') ? '文字内容超过 100 MiB 上限' : '文字内容格式无效';
+  }
+});
+elements.pasteTextCancel.addEventListener('click', closePasteTextDialog);
+elements.pasteTextDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  closePasteTextDialog();
+});
+elements.pdfPasswordForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  finishPdfPassword(elements.pdfPassword.value);
+});
+elements.pdfPasswordCancel.addEventListener('click', () => finishPdfPassword(null));
+elements.pdfPasswordDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  finishPdfPassword(null);
+});
+elements.resetButton.addEventListener('click', reset);
+elements.sourceEditor.addEventListener('input', () => {
+  state.sourceText = elements.sourceEditor.value;
+  clearNerFindings();
+  if (state.image) {
+    state.imageMappingValid = false;
+    elements.mappingState.textContent = '文本已编辑，图片坐标需重新导入';
+    elements.mappingState.classList.add('stale');
+    elements.exportImageButton.classList.add('hidden');
+  }
+  if (state.office) {
+    state.officeMappingValid = false;
+    elements.exportOfficeButton.classList.add('hidden');
+  }
+  if (state.csv) {
+    state.csvMappingValid = false;
+    elements.exportCsvButton.disabled = true;
+    elements.exportCsvButton.title = '正文已经手工编辑；重新导入后才能保证原编码、分隔符和行尾结构';
+  }
+  elements.charCount.textContent = state.sourceText.length.toLocaleString('zh-CN');
+  runAnalysis();
+});
+elements.customTerms.addEventListener('input', runAnalysis);
+elements.typedTerms.addEventListener('input', runAnalysis);
+elements.alwaysKeepTerms.addEventListener('input', runAnalysis);
+elements.nerSelectButton.addEventListener('click', async () => {
+  try {
+    state.nerBusy = true;
+    renderNerState();
+    const value = await window.veilforge.selectNerModel();
+    if (value?.canceled) return;
+    state.ner = value;
+    clearNerFindings();
+    runAnalysis();
+    showToast(`离线模型已加载：${value.name} · ${(value.modelBytes / 1024 / 1024).toFixed(1)} MB`);
+  } catch (error) {
+    showToast(`模型加载失败：${error?.message || error}`, 'error');
+  } finally {
+    state.nerBusy = false;
+    renderNerState();
+  }
+});
+elements.nerClearButton.addEventListener('click', async () => {
+  try {
+    state.nerBusy = true;
+    renderNerState();
+    await window.veilforge.clearNerModel();
+    state.ner = null;
+    clearNerFindings();
+    runAnalysis();
+    showToast('离线语义模型已卸载');
+  } catch (error) {
+    showToast(`模型卸载失败：${error?.message || error}`, 'error');
+  } finally {
+    state.nerBusy = false;
+    renderNerState();
+  }
+});
+elements.nerAnalyzeButton.addEventListener('click', async () => {
+  if (!state.ner?.loaded || !state.sourceText || state.nerBusy) return;
+  const inputText = state.sourceText;
+  try {
+    state.nerBusy = true;
+    renderNerState();
+    const value = await window.veilforge.analyzeNer(inputText, Number(elements.nerThreshold.value));
+    if (inputText !== state.sourceText) return;
+    state.nerFindings = value.entities;
+    state.nerText = inputText;
+    runAnalysis();
+    showToast(`模型识别完成：采纳 ${value.accepted} 项，待复核 ${value.review} 项，${value.tokens} 个词元 / ${value.windows} 个窗口`);
+  } catch (error) {
+    const message = String(error?.message || error);
+    showToast(message.includes('LOCAL_NER_MODEL_NOT_LOADED') ? '请先选择本地 ONNX 模型目录' : `语义识别失败：${message}`, 'error');
+  } finally {
+    state.nerBusy = false;
+    renderNerState();
+  }
+});
+elements.ocrRapidButton.addEventListener('click', async () => {
+  try {
+    state.ocrBackendBusy = true;
+    renderOcrBackendState();
+    const value = await window.veilforge.selectRapidOcrPython();
+    if (value?.canceled) return;
+    state.ocrBackend = value;
+    showToast(`RapidOCR 已启用：${value.modelPack?.id || 'PP-OCRv6'}`);
+  } catch (error) {
+    showToast(`RapidOCR 启用失败：${error?.message || error}`, 'error');
+  } finally {
+    state.ocrBackendBusy = false;
+    renderOcrBackendState();
+  }
+});
+elements.ocrTesseractButton.addEventListener('click', async () => {
+  try {
+    state.ocrBackendBusy = true;
+    renderOcrBackendState();
+    state.ocrBackend = await window.veilforge.useTesseractBackend();
+    showToast('已切换到 Tesseract.js');
+  } catch (error) {
+    showToast(`OCR 切换失败：${error?.message || error}`, 'error');
+  } finally {
+    state.ocrBackendBusy = false;
+    renderOcrBackendState();
+  }
+});
+elements.exportTextButton.addEventListener('click', () => exportResult('txt'));
+elements.exportJsonButton.addEventListener('click', () => exportResult('json'));
+elements.exportOcrTextButton.addEventListener('click', exportRecognizedText);
+elements.exportImageButton.addEventListener('click', () => exportResult(state.image?.kind || 'image'));
+elements.exportOfficeButton.addEventListener('click', () => exportResult(state.office?.kind || 'docx'));
+elements.exportCsvButton.addEventListener('click', () => exportResult('csv'));
+elements.imageElement.addEventListener('load', renderImageOverlay);
+elements.vaultPasswordForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const password = elements.vaultPassword.value;
+  if (password.length < 10 || password.length > 256) {
+    elements.vaultDialogError.textContent = '密码至少 10 个字符，最多 256 个字符';
+    return;
+  }
+  if (vaultDialogNeedsConfirmation && password !== elements.vaultPasswordConfirm.value) {
+    elements.vaultDialogError.textContent = '两次输入的密码不一致';
+    return;
+  }
+  finishVaultPassword(password);
+});
+elements.vaultDialogCancel.addEventListener('click', () => finishVaultPassword(null));
+elements.vaultPasswordDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  finishVaultPassword(null);
+});
+elements.vaultCreateButton.addEventListener('click', async () => {
+  const password = await requestVaultPassword('create');
+  if (!password) return;
+  try {
+    const value = await window.veilforge.createVault(password);
+    if (value?.canceled) return;
+    state.autoSaveToVault = false;
+    state.batchAutoVault = false;
+    state.vaultFilters = { query: '', kind: 'all', dateFrom: '', dateTo: '' };
+    clearRestoreSession();
+    applyVaultState(value);
+    showToast('AES-256-GCM 加密仓库已创建');
+  } catch (error) {
+    showToast(`新建失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultOpenButton.addEventListener('click', async () => {
+  const password = await requestVaultPassword('open');
+  if (!password) return;
+  try {
+    const value = await window.veilforge.openVault(password);
+    if (value?.canceled) return;
+    state.autoSaveToVault = false;
+    state.batchAutoVault = false;
+    state.vaultFilters = { query: '', kind: 'all', dateFrom: '', dateTo: '' };
+    clearRestoreSession();
+    applyVaultState(value);
+    showToast('加密仓库已解锁');
+  } catch (error) {
+    showToast(`打开失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultSaveButton.addEventListener('click', async () => {
+  if (!state.vault || !state.sourceText) return;
+  try {
+    await saveCurrentToVault({ notify: true });
+  } catch (error) {
+    showToast(`保存失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultBundleSaveButton.addEventListener('click', async () => {
+  if (!state.vault || !state.sourceText || !state.vaultAttachmentToken) return;
+  try {
+    await saveCurrentToVault({ notify: true, includeAttachments: true });
+  } catch (error) {
+    showToast(`附件入库失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultAutoSave.addEventListener('change', () => {
+  state.autoSaveToVault = Boolean(state.vault && elements.vaultAutoSave.checked);
+  renderVaultState();
+  showToast(state.autoSaveToVault ? '已开启：成功导出后自动写入当前仓库' : '已关闭导出后自动入库');
+});
+elements.batchAutoVault.addEventListener('change', () => {
+  state.batchAutoVault = Boolean(state.vault && elements.batchAutoVault.checked);
+  renderVaultState();
+  showToast(state.batchAutoVault ? '已开启：批量导出成功项自动写入当前仓库' : '已关闭批量自动入库');
+});
+
+let vaultFilterTimer = null;
+function scheduleVaultFilterRefresh() {
+  clearTimeout(vaultFilterTimer);
+  vaultFilterTimer = window.setTimeout(() => {
+    refreshVaultEntries().catch((error) => showToast(`筛选失败：${vaultErrorMessage(error)}`, 'error'));
+  }, 160);
+}
+elements.vaultSearchInput.addEventListener('input', () => {
+  state.vaultFilters.query = elements.vaultSearchInput.value;
+  scheduleVaultFilterRefresh();
+});
+for (const [element, field] of [
+  [elements.vaultKindFilter, 'kind'],
+  [elements.vaultDateFrom, 'dateFrom'],
+  [elements.vaultDateTo, 'dateTo']
+]) {
+  element.addEventListener('change', () => {
+    state.vaultFilters[field] = element.value;
+    scheduleVaultFilterRefresh();
+  });
+}
+elements.vaultFilterClearButton.addEventListener('click', () => {
+  state.vaultFilters = { query: '', kind: 'all', dateFrom: '', dateTo: '' };
+  refreshVaultEntries().catch((error) => showToast(`清除筛选失败：${vaultErrorMessage(error)}`, 'error'));
+});
+elements.vaultBackupButton.addEventListener('click', async () => {
+  if (!state.vault) return;
+  const password = await requestVaultPassword('backup');
+  if (!password) return;
+  try {
+    const value = await window.veilforge.backupVault(state.vault.token, password);
+    if (value?.canceled) return;
+    await applyVaultStateAndFilters(value);
+    showToast(`加密备份已导出：${value.backup.entries} 条记录`);
+  } catch (error) {
+    showToast(`备份失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultImportButton.addEventListener('click', async () => {
+  if (!state.vault) return;
+  const password = await requestVaultPassword('import');
+  if (!password) return;
+  try {
+    const value = await window.veilforge.importVault(state.vault.token, password, elements.vaultImportPolicy.value);
+    if (value?.canceled) return;
+    await applyVaultStateAndFilters(value);
+    const report = value.importReport;
+    showToast(`备份导入完成：新增 ${report.imported} 条，跳过 ${report.skipped} 条，改名 ${report.renamed} 条`);
+  } catch (error) {
+    showToast(`导入失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultLoadMoreButton.addEventListener('click', async () => {
+  if (!state.vault?.page?.hasMore) return;
+  try {
+    await refreshVaultEntries({ append: true });
+  } catch (error) {
+    showToast(`加载失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultCompactButton.addEventListener('click', async () => {
+  if (!state.vault || state.vault.compacting) return;
+  state.vault.compacting = true;
+  renderVaultState();
+  try {
+    const value = await window.veilforge.compactVault(state.vault.token);
+    await applyVaultStateAndFilters(value);
+    showToast(`仓库压缩完成：回收 ${formatBytes(value.compaction.reclaimedBytes)}`);
+  } catch (error) {
+    state.vault.compacting = false;
+    renderVaultState();
+    showToast(`压缩失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultRotateButton.addEventListener('click', async () => {
+  if (!state.vault) return;
+  const password = await requestVaultPassword('rotate');
+  if (!password) return;
+  try {
+    const value = await window.veilforge.rotateVaultPassword(state.vault.token, password);
+    await applyVaultStateAndFilters(value);
+    showToast('仓库密码已轮换，旧密码立即失效');
+  } catch (error) {
+    showToast(`轮换失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultLockButton.addEventListener('click', async () => {
+  if (!state.vault) return;
+  try {
+    await window.veilforge.lockVault(state.vault.token);
+    state.vault = null;
+    clearRestoreSession();
+    renderVaultState();
+    showToast('加密仓库已锁定，内存密钥已清除');
+  } catch (error) {
+    showToast(`锁定失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultTimeout.addEventListener('change', async () => {
+  if (!state.vault) return;
+  try {
+    const value = await window.veilforge.setVaultTimeout(state.vault.token, Number(elements.vaultTimeout.value));
+    await applyVaultStateAndFilters(value);
+    showToast(`自动锁定已设为 ${value.timeoutMinutes} 分钟`);
+  } catch (error) {
+    showToast(`设置失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+window.veilforge.onVaultLocked((detail) => {
+  if (state.vault?.token !== detail?.token) return;
+  state.vault = null;
+  clearRestoreSession();
+  renderVaultState();
+  showToast('加密仓库已自动锁定，内存密钥已清除');
+});
+elements.restoreButton.addEventListener('click', () => {
+  if (!state.restoreEntry?.mapping) return;
+  try {
+    const result = restoreTokens(elements.restoreInput.value, state.restoreEntry.mapping, { mode: elements.restoreMode.value });
+    state.restoreResult = result;
+    elements.restoreOutput.value = result.restoredText;
+    const parts = [`已恢复 ${result.restoredCount} 处`];
+    if (result.missing.length) parts.push(`未出现代号 ${result.missing.length} 个`);
+    if (result.unknownTokens.length) parts.push(`未知代号 ${result.unknownTokens.length} 个`);
+    if (result.repeated.length) parts.push(`重复代号 ${result.repeated.length} 个`);
+    parts.push(result.requiresReview ? '需要人工核对' : '核对通过');
+    elements.restoreReport.textContent = parts.join(' · ');
+    elements.restoreReport.classList.toggle('needs-review', result.requiresReview);
+    elements.restoreExportButton.disabled = !result.restoredText;
+    showToast(result.requiresReview ? '逆脱敏完成，请核对报告' : '逆脱敏完成，代号已在本机换回');
+  } catch (error) {
+    showToast(`逆脱敏失败：${error?.message || error}`, 'error');
+  }
+});
+elements.restoreExportButton.addEventListener('click', async () => {
+  if (!state.restoreResult?.restoredText) return;
+  try {
+    const result = await window.veilforge.exportResult({
+      kind: 'txt',
+      sourceName: `${state.restoreEntry?.name || '逆脱敏结果'}.txt`,
+      text: state.restoreResult.restoredText,
+      findings: []
+    });
+    if (result && !result.canceled) showToast(`逆脱敏结果已导出 ${result.bytes.toLocaleString('zh-CN')} bytes`);
+  } catch (error) {
+    showToast(`导出失败：${error?.message || error}`, 'error');
+  }
+});
+elements.restoreOfficeButton.addEventListener('click', async () => {
+  if (!state.restoreEntry?.mapping) return;
+  try {
+    const result = await window.veilforge.restoreOffice(state.restoreEntry.mapping);
+    if (!result || result.canceled) return;
+    const notes = [`已恢复 ${result.restoredOccurrences} 处`, `${result.knownTokens} 个映射`];
+    if (result.missingTokens.length) notes.push(`缺失 ${result.missingTokens.length} 个`);
+    if (result.unknownTokens.length) notes.push(`未知 ${result.unknownTokens.length} 个`);
+    if (result.repeatedTokens.length) notes.push(`重复 ${result.repeatedTokens.length} 个`);
+    notes.push(result.complete ? '原格式核对通过' : '需要人工核对');
+    elements.restoreReport.textContent = notes.join(' · ');
+    elements.restoreReport.classList.toggle('needs-review', !result.complete);
+    showToast(result.complete ? `原格式逆脱敏完成：${String(result.kind || 'document').toUpperCase()}` : '原格式逆脱敏完成，请核对报告');
+  } catch (error) {
+    showToast(`原格式逆脱敏失败：${error?.message || error}`, 'error');
+  }
+});
+elements.pagePreviousButton.addEventListener('click', () => {
+  if (state.currentPage > 0) {
+    state.currentPage -= 1;
+    renderImagePage();
+  }
+});
+elements.pageNextButton.addEventListener('click', () => {
+  if (state.image && state.currentPage < state.image.pageCount - 1) {
+    state.currentPage += 1;
+    renderImagePage();
+  }
+});
+elements.ocrCorrectionApplyButton.addEventListener('click', async () => {
+  const page = currentImagePage();
+  if (!state.image?.token || !page) return;
+  const corrections = [...elements.ocrCorrectionList.querySelectorAll('.ocr-correction-input')]
+    .filter((input) => input.value.trim() && input.value.trim() !== input.dataset.original)
+    .map((input) => ({ wordIndex: Number(input.dataset.wordIndex), text: input.value.trim() }));
+  if (!corrections.length) {
+    showToast('没有需要应用的文字变化');
+    return;
+  }
+  elements.ocrCorrectionApplyButton.disabled = true;
+  try {
+    const result = await window.veilforge.correctOcr(state.image.token, page.pageNumber, corrections);
+    state.sourceText = result.text;
+    state.image = result.image;
+    state.imageMappingValid = true;
+    state.reversibleNonce = createTokenNonce();
+    state.reversibleCache = null;
+    clearNerFindings();
+    elements.charCount.textContent = result.characters.toLocaleString('zh-CN');
+    runAnalysis();
+    renderImagePage();
+    showToast(`已应用 ${result.changed} 项校正，剩余 ${result.remaining} 项待复核`);
+  } catch (error) {
+    showToast(`OCR 校正失败：${error?.message || error}`, 'error');
+  } finally {
+    elements.ocrCorrectionApplyButton.disabled = false;
+  }
+});
+
+for (const button of document.querySelectorAll('[data-style]')) {
+  button.addEventListener('click', () => {
+    state.style = button.dataset.style;
+    document.querySelectorAll('[data-style]').forEach((item) => item.classList.toggle('active', item === button));
+    runAnalysis();
+    renderVaultState();
+  });
+}
+
+for (const button of document.querySelectorAll('[data-tab]')) {
+  button.addEventListener('click', () => {
+    document.querySelectorAll('[data-tab]').forEach((item) => item.classList.toggle('active', item === button));
+    const sourceActive = button.dataset.tab === 'source';
+    elements.sourceEditor.classList.toggle('hidden', !sourceActive);
+    elements.redactedEditor.classList.toggle('hidden', sourceActive);
+  });
+}
+
+state.activeModule = moduleIdFromHash(window.location.hash);
+history.replaceState({ module: state.activeModule }, '', `#${state.activeModule}`);
+renderModuleNavigation();
+renderTypes();
+renderNerState();
+renderVaultState();
+renderOcrBackendState();
+void initializeBundledNer();
+void initializeOcrBackend();

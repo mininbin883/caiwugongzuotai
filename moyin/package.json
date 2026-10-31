@@ -1,0 +1,125 @@
+{
+  "name": "veilforge-local-redactor",
+  "version": "2.14.1",
+  "description": "离线文档敏感信息识别与脱敏桌面应用",
+  "author": "Clean-room implementation",
+  "main": "src/main.cjs",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke-test",
+    "test": "node --test tests/*.test.mjs",
+    "test:pdf": "node tools/pdf-integration.cjs",
+    "test:pdf-reversible": "node tools/pdf-reversible-integration.cjs",
+    "test:pdf-complex": "node tools/pdf-complex-integration.cjs",
+    "test:office": "node tools/office-integration.cjs",
+    "test:office-reversible": "node tools/office-reversible-integration.cjs",
+    "test:vault-migration": "node tools/vault-migration-integration.cjs",
+    "test:ner": "node tools/ner-integration.cjs",
+    "test:ocr-quality": "node tools/ocr-quality-integration.cjs",
+    "test:ocr-layout": "node tools/ocr-layout-regression.cjs",
+    "test:capacity": "node tools/capacity-foundation-integration.cjs",
+    "test:vault-v3-capacity": "node tools/vault-v3-capacity-integration.cjs",
+    "test:vault-v3-maintenance": "node tools/vault-v3-maintenance-integration.cjs",
+    "test:vault-v3-longrun": "node tools/vault-v3-capacity-integration.cjs --target-mib=1024",
+    "build:win": "electron-builder --win portable --x64",
+    "verify": "npm test && npm run smoke",
+    "test:pdf-geometry": "node tools/pdf-geometry-integration.cjs",
+    "test:pdf-security": "node tools/pdf-phase21-integration.cjs",
+    "test:csv": "node tools/csv-integration.cjs",
+    "test:phase24": "node tools/phase24-integration.cjs",
+    "test:phase25": "node tools/phase25-integration.cjs",
+    "benchmark:ocr": "node tools/ocr-benchmark.cjs",
+    "test:phase26": "node tools/phase26-integration.cjs",
+    "test:ui-phase26": "electron tools/ui-phase26-probe-main.cjs --no-sandbox",
+    "test:phase27": "node tools/phase27-integration.cjs",
+    "test:ui-phase27": "electron tools/ui-phase27-probe-main.cjs --no-sandbox",
+    "test:phase28": "node tools/phase28-integration.cjs",
+    "test:ui-phase28": "electron tools/ui-phase28-probe-main.cjs --no-sandbox",
+    "test:phase29": "node tools/phase29-integration.cjs",
+    "test:ui-phase29": "electron tools/ui-phase29-probe-main.cjs --no-sandbox",
+    "test:phase30": "node tools/phase30-integration.cjs",
+    "test:ui-phase30": "electron tools/ui-phase30-probe-main.cjs --no-sandbox",
+    "test:phase31": "node tools/phase31-integration.cjs",
+    "test:ui-phase31": "electron tools/ui-phase31-probe-main.cjs --no-sandbox",
+    "test:phase32": "node tools/phase32-ocr-benchmark.cjs output/ocr/phase32/corpus output/ocr/phase32/ocr-phase32-report.json",
+    "test:phase33": "node tools/phase32-ocr-benchmark.cjs output/ocr/phase33/corpus output/ocr/phase33/ocr-recall-report.json",
+    "test:phase34": "node tools/phase32-ocr-benchmark.cjs output/ocr/phase34/corpus output/ocr/phase34/ocr-vertical-report.json",
+    "test:phase35": "node --test tests/sender-guard.test.mjs"
+  },
+  "build": {
+    "appId": "cn.veilforge.local",
+    "productName": "墨隐本地脱敏",
+    "electronDist": "node_modules/electron/dist",
+    "disableAsarIntegrity": true,
+    "artifactName": "VeilForge-${version}-${arch}-portable.${ext}",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/tesseract.js/**/*",
+      "node_modules/tesseract.js-core/**/*",
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*",
+      "node_modules/@napi-rs/canvas/**/*",
+      "node_modules/@napi-rs/*/**/*",
+      "node_modules/onnxruntime-node/**/*",
+      "node_modules/onnxruntime-common/**/*"
+    ],
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "extraResources": [
+      {
+        "from": "ocr-data",
+        "to": "ocr-data",
+        "filter": [
+          "*.traineddata.gz"
+        ]
+      },
+      {
+        "from": "model-packs",
+        "to": "model-packs"
+      },
+      {
+        "from": "tools/rapidocr-bridge.py",
+        "to": "tools/rapidocr-bridge.py"
+      },
+      {
+        "from": "runtime-packs",
+        "to": "runtime-packs"
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "portable"
+      ],
+      "requestedExecutionLevel": "asInvoker"
+    }
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "0.1.100",
+    "@signpdf/placeholder-pdf-lib": "^4.0.0",
+    "@signpdf/signer-p12": "^4.0.0",
+    "@signpdf/signpdf": "^4.0.0",
+    "@signpdf/utils": "^4.0.0",
+    "iconv-lite": "^0.7.0",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.11.0",
+    "node-forge": "^1.3.3",
+    "onnxruntime-node": "1.30.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^5.4.296",
+    "sharp": "^0.35.5",
+    "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "electron": "43.7.7",
+    "electron-builder": "^26.0.12"
+  }
+}

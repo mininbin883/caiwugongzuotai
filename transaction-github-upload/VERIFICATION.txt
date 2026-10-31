@@ -1,0 +1,50 @@
+GITHUB UPLOAD VERIFICATION — 墨隐 v2.14.1 + 隐页 v1.0.0.9
+Date: 2026-10-31 Asia/Shanghai
+Repository: https://github.com/mininbin883/caiwugongzuotai
+Branch: main
+Original HEAD: f98efe931920abe20023681080fc5d155e86dc9f
+Release tag: software-bundle-2026.10.31
+
+CHANGED BRANCH / FIELD
+1. main :: moyin/ — 墨隐 v2.14.1 源码、测试与工具
+2. main :: yinye/ — 隐页 1.0.0.9 发行清单和使用说明
+3. main :: releases/ — 三个发布资产的 SHA-256 与上传清单
+4. GitHub Release software-bundle-2026.10.31 — 两个 Windows 完整包和墨隐源码快照
+
+FOUR ARTIFACTS
+MODIFIED_FILE=transaction-github-upload/MODIFIED_FILE.md
+DIFF_FILE=transaction-github-upload/DIFF_FILE.patch
+VERIFICATION=transaction-github-upload/VERIFICATION.txt
+ROLLBACK=transaction-github-upload/ROLLBACK.sh
+
+BASELINE
+Command: node transaction-github-upload/probe-upload.cjs transaction-github-upload/original-tree
+Input: preserved original repository snapshot at HEAD f98efe931920abe20023681080fc5d155e86dc9f
+Literal output:
+GITHUB_UPLOAD_PROBE 0/10 root=D:\360安全浏览器下载\UCODE\caiwugongzuotai-upload\transaction-github-upload\original-tree failed=root-readme,moyin-version,moyin-main,moyin-tests,yinye-version,yinye-clean-metadata,asset-manifest,checksums,transaction-modified,rollback-script
+Exit status: 1 (expected baseline without uploaded software)
+
+MODIFIED
+Command: node transaction-github-upload/probe-upload.cjs .
+Input: prepared repository tree
+Literal output:
+GITHUB_UPLOAD_PROBE 10/10 root=D:\360安全浏览器下载\UCODE\caiwugongzuotai-upload failed=none
+Exit status: 0
+
+SOURCE TEST
+Command: npm test
+Input: D:\360安全浏览器下载\UCODE\yinye-cleanroom-clone
+Literal result: tests 125; pass 125; fail 0; duration_ms 2739.465
+Exit status: 0
+
+PACKAGE VERIFICATION
+Yinye clean ZIP: entries=2654; manifestFiles=2653; bad=[]; forbidden=[]; result=PASS
+VeilForge source ZIP: entries=148; required files present; result=PASS
+
+ASSET HASHES
+847B8B127617DAE73174D64C8A8756418011B5D58CC56817D8F75EDF11F72C3D  VeilForge-2.14.1-win-unpacked.zip
+B03FFDD1F2129DAF400CB8D93BB8F787D065645E29F81446EF38A15783B53FA0  VeilForge-2.14.1-source.zip
+9DA3B8863FA1B2F5C0054BE83B03C73ED7B6232DACD66860B740A53B26A1892F  Yinye-1.0.0.9-win-x64-clean.zip
+
+REMOTE PUSH / RELEASE / ROLLBACK
+Pending final receipts.

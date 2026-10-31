@@ -1,0 +1,8 @@
+node_modules/
+output/
+runtime-packs/
+model-packs/
+tmp/
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>墨隐 · 本地文档脱敏</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">墨</div>
+        <div>
+          <div class="brand">墨隐</div>
+          <div class="brand-subtitle">LOCAL PRIVACY STUDIO</div>
+        </div>
+      </div>
+      <div class="privacy-badge"><span></span>离线模式 · 内容不出本机</div>
+      <div class="top-actions">
+        <button id="resetButton" class="button button-ghost">清空</button>
+        <button id="openButton" class="button button-dark">导入文档</button>
+      </div>
+    </header>
+
+    <nav id="moduleNav" class="module-nav" aria-label="功能导航">
+      <button class="module-nav-item active" type="button" data-module="redact" aria-current="page">
+        <span class="module-nav-index">01</span><span><strong>文件脱敏</strong><small>三步主流程</small></span>
+      </button>
+      <button class="module-nav-item" type="button" data-module="batch">
+        <span class="module-nav-index">02</span><span><strong>批处理</strong><small><b id="batchNavCount">0</b> 个任务</small></span>
+      </button>
+      <button class="module-nav-item" type="button" data-module="vault">
+        <span class="module-nav-index">03</span><span><strong>加密仓库</strong><small id="vaultNavState">已锁定</small></span>
+      </button>
+      <button class="module-nav-item" type="button" data-module="restore">
+        <span class="module-nav-index">04</span><span><strong>逆脱敏</strong><small id="restoreNavState">等待可逆记录</small></span>
+      </button>
+      <button class="module-nav-item" type="button" data-module="protect">
+        <span class="module-nav-index">05</span><span><strong>保护设置</strong><small><b id="protectNavState">0</b> 类已启用</small></span>
+      </button>
+    </nav>
+
+    <main class="workspace">
+      <aside class="sidebar">
+        <section id="moduleSideGuide" class="side-section module-side-guide" aria-live="polite">
+          <div id="moduleSideKicker" class="section-kicker">主工作流</div>
+          <h2 id="moduleSideTitle">文件脱敏</h2>
+          <ol id="moduleSideSteps" class="module-side-steps"></ol>
+        </section>
+
+        <section class="side-section" data-module-section="redact protect">
+          <div class="section-kicker">识别范围</div>
+          <h2>敏感信息类型</h2>
+          <div id="typeList" class="type-list"></div>
+        </section>
+
+        <section class="side-section" data-module-section="redact protect">
+          <div class="section-kicker">脱敏方式</div>
+          <div class="segmented">
+            <button class="segment active" data-style="mask">保留轮廓</button>
+            <button class="segment" data-style="label">替换标签</button>
+            <button class="segment" data-style="token">可逆代号</button>
+          </div>
+        </section>
+
+        <section class="side-section" data-module-section="protect">
+          <label for="customTerms" class="section-kicker">自定义词</label>
+          <textarea id="customTerms" class="small-input" rows="3" placeholder="每行一个需要隐藏的普通词"></textarea>
+        </section>
+
+        <section class="side-section" data-module-section="protect">
+          <label for="typedTerms" class="section-kicker">类型化隐藏词</label>
+          <textarea id="typedTerms" class="small-input" rows="5" placeholder="公司：星环数据&#10;姓名：张三&#10;地址：科创路 8 号"></textarea>
+          <p class="field-hint">格式为“类型：内容”，用于补足规则盲区。</p>
+        </section>
+
+        <section class="side-section" data-module-section="protect">
+          <label for="alwaysKeepTerms" class="section-kicker">总是保留词</label>
+          <textarea id="alwaysKeepTerms" class="small-input" rows="3" placeholder="每行一个不参与脱敏的词"></textarea>
+          <p class="field-hint">命中此列表的内容保持原文。</p>
+        </section>
+
+        <section class="side-section ner-section" data-module-section="protect">
+          <div class="ner-heading">
+            <div>
+              <div class="section-kicker">离线语义模型</div>
+              <h2>中文 ONNX NER</h2>
+            </div>
+            <span id="nerStatus" class="ner-status">未加载</span>
+          </div>
+          <p id="nerMeta" class="field-hint">正在校验随包中文模型；也可以选择兼容的本机模型目录。</p>
+          <label class="ner-threshold-label" for="nerThreshold">自动采纳阈值</label>
+          <select id="nerThreshold" class="vault-timeout">
+            <option value="0.70">70%</option>
+            <option value="0.78" selected>78%</option>
+            <option value="0.85">85%</option>
+          </select>
+          <div class="ner-actions">
+            <button id="nerSelectButton" class="button button-ghost button-small">选择其他模型</button>
+            <button id="nerClearButton" class="button button-ghost button-small" disabled>卸载</button>
+          </div>
+          <button id="nerAnalyzeButton" class="button button-dark button-small ner-analyze" disabled>运行离线语义识别</button>
+          <p class="field-hint">规则结果优先；低于阈值的模型命中保留为“待复核”且默认不处理。</p>
+        </section>
+
+        <section class="side-section ner-section" data-module-section="protect">
+          <div class="ner-heading">
+            <div>
+              <div class="section-kicker">图片文字识别</div>
+              <h2>OCR 引擎</h2>
+            </div>
+            <span id="ocrBackendStatus" class="ner-status">检测中</span>
+          </div>
+          <p id="ocrBackendMeta" class="field-hint">正在校验内置 Python、RapidOCR 与固定哈希 PP-OCRv6 模型包。</p>
+          <div class="ner-actions">
+            <button id="ocrRapidButton" class="button button-ghost button-small">启用 RapidOCR</button>
+            <button id="ocrTesseractButton" class="button button-ghost button-small">使用 Tesseract</button>
+          </div>
+        </section>
+
+        <section class="side-section vault-section" data-module-section="vault">
+          <div class="vault-heading">
+            <div>
+              <div class="section-kicker">加密仓库</div>
+              <h2>AES 本地保险箱</h2>
+            </div>
+            <span id="vaultStatus" class="vault-status">已锁定</span>
+          </div>
+          <div id="vaultLockedActions" class="vault-actions">
+            <button id="vaultCreateButton" class="button button-ghost button-small">新建</button>
+            <button id="vaultOpenButton" class="button button-dark button-small">打开</button>
+          </div>
+          <div id="vaultUnlocked" class="vault-unlocked hidden">
+            <div id="vaultName" class="vault-name"></div>
+            <label class="vault-timeout-label" for="vaultTimeout">自动锁定</label>
+            <select id="vaultTimeout" class="vault-timeout">
+              <option value="1">1 分钟</option>
+              <option value="5" selected>5 分钟</option>
+              <option value="15">15 分钟</option>
+              <option value="30">30 分钟</option>
+              <option value="60">60 分钟</option>
+            </select>
+            <button id="vaultSaveButton" class="button button-accent button-small" disabled>保存当前脱敏结果</button>
+            <button id="vaultBundleSaveButton" class="button button-secondary button-small" disabled>保存原件＋脱敏副本</button>
+            <label class="vault-auto-save" for="vaultAutoSave">
+              <input id="vaultAutoSave" type="checkbox">
+              <span><strong>导出后自动入库</strong><small>仅当前解锁会话有效，可随时关闭</small></span>
+            </label>
+            <label class="vault-timeout-label" for="vaultImportPolicy">导入冲突</label>
+            <select id="vaultImportPolicy" class="vault-timeout">
+              <option value="rename" selected>保留并自动改名</option>
+              <option value="skip">跳过冲突项</option>
+              <option value="reject">发现冲突即取消</option>
+            </select>
+            <div class="vault-actions">
+              <button id="vaultBackupButton" class="button button-ghost button-small">导出备份</button>
+              <button id="vaultImportButton" class="button button-ghost button-small">导入备份</button>
+            </div>
+            <div class="vault-backup-history-panel">
+              <div class="vault-entry-heading"><span>备份历史</span><small>认证加密持久化</small></div>
+              <div id="vaultBackupHistory" class="vault-backup-history"></div>
+            </div>
+            <div class="vault-actions">
+              <button id="vaultRotateButton" class="button button-ghost button-small">轮换密码</button>
+              <button id="vaultLockButton" class="button button-ghost button-small">立即锁定</button>
+            </div>
+            <div class="vault-actions">
+              <button id="vaultCompactButton" class="button button-ghost button-small">压缩回收空间</button>
+              <span id="vaultStorageStats" class="vault-storage-stats"></span>
+            </div>
+            <div class="vault-entry-heading"><span>仓库内容</span><span id="vaultPageSummary"></span></div>
+            <div class="vault-explorer-controls">
+              <input id="vaultSearchInput" type="search" maxlength="120" placeholder="搜索编号、名称或敏感类型" aria-label="搜索仓库">
+              <select id="vaultKindFilter" aria-label="仓库记录类型">
+                <option value="all">全部类型</option>
+                <option value="redacted-text">脱敏文本</option>
+                <option value="reversible-map">可逆记录</option>
+              </select>
+              <label>从<input id="vaultDateFrom" type="date" aria-label="开始日期"></label>
+              <label>至<input id="vaultDateTo" type="date" aria-label="结束日期"></label>
+              <button id="vaultFilterClearButton" class="button button-ghost button-small" type="button">清除筛选</button>
+            </div>
+            <div id="vaultEntryList" class="vault-entry-list"></div>
+            <button id="vaultLoadMoreButton" class="button button-ghost button-small hidden">加载更多</button>
+          </div>
+        </section>
+
+        <div class="local-note" data-module-section="redact batch vault restore protect">
+          <strong>本地处理保证</strong>
+          <p>页面没有网络权限。解析、识别、复核和导出均在当前设备完成。</p>
+        </div>
+      </aside>
+
+      <section class="main-panel">
+        <section id="moduleOverview" class="module-overview hidden" aria-live="polite">
+          <div class="module-overview-copy">
+            <div id="moduleOverviewKicker" class="section-kicker">功能</div>
+            <h1 id="moduleOverviewTitle">功能导航</h1>
+            <p id="moduleOverviewDescription"></p>
+            <span id="moduleOverviewStatus" class="module-overview-status"></span>
+          </div>
+          <ol id="moduleChecklist" class="module-checklist"></ol>
+          <button id="modulePrimaryAction" class="button button-accent" type="button">开始</button>
+        </section>
+
+        <div class="document-header" data-redact-view>
+          <div>
+            <div class="section-kicker">当前文档</div>
+            <h1 id="documentName">未导入文档</h1>
+            <p id="documentMeta">支持文档、图片 OCR 与多页 PDF 涂黑导出</p>
+          </div>
+          <div class="metrics">
+            <div class="metric"><strong id="charCount">0</strong><span>字符</span></div>
+            <div class="metric accent"><strong id="findingCount">0</strong><span>命中</span></div>
+            <div class="metric"><strong id="enabledCount">0</strong><span>已处理</span></div>
+          </div>
+        </div>
+
+        <ol id="workflowGuide" class="workflow-guide" aria-label="三步脱敏闭环" data-redact-view>
+          <li id="workflowStepImport" class="current">
+            <span>1</span><div><strong>导入</strong><small>原文件保持不变</small></div>
+          </li>
+          <li id="workflowStepReview">
+            <span>2</span><div><strong>核对</strong><small>逐项决定是否隐藏</small></div>
+          </li>
+          <li id="workflowStepExport">
+            <span>3</span><div><strong>导出与入库</strong><small>副本交给 AI，映射留在本机</small></div>
+          </li>
+          <li class="workflow-status"><strong id="workflowSummary">当前：导入文档</strong></li>
+        </ol>
+
+        <section id="batchPanel" class="batch-panel hidden module-hidden" aria-label="批处理队列">
+          <div class="batch-heading">
+            <div>
+              <div class="section-kicker">后台任务</div>
+              <h2>批处理队列</h2>
+            </div>
+            <div class="batch-summary">
+              <span id="batchSummary">0 个任务</span>
+              <label class="batch-auto-vault" for="batchAutoVault">
+                <input id="batchAutoVault" type="checkbox" disabled>
+                <span>导出后自动入库</span>
+              </label>
+              <button id="batchExportButton" class="button button-dark button-small" disabled>批量导出</button>
+              <button id="batchClearButton" class="button button-ghost button-small">清理已完成</button>
+            </div>
+          </div>
+          <div id="batchList" class="batch-list"></div>
+        </section>
+
+        <div id="emptyState" class="empty-state drop-zone" data-redact-view>
+          <div class="empty-symbol">文</div>
+          <h2>让文档安心交给 AI</h2>
+          <p>导入后先核对要隐藏的信息，再导出副本；拖入多个文件时会在本机依次处理。</p>
+          <div class="empty-actions">
+            <button id="emptyOpenButton" class="button button-accent">选择文档</button>
+            <button id="pasteTextButton" class="button button-ghost">粘贴文字</button>
+            <button id="imageToTextButton" class="button button-ghost">图片转 TXT</button>
+            <button id="demoButton" class="button button-ghost">用示例试一试</button>
+          </div>
+          <div class="supported">WORD · EXCEL · PDF · CSV · TXT/MD · PNG/JPG/WEBP/TIFF</div>
+          <p class="empty-privacy">文件无需上传；原文件保持原样。</p>
+        </div>
+
+        <div id="editorState" class="editor-state hidden" data-redact-view>
+          <div id="imagePreview" class="image-preview hidden">
+            <div class="image-preview-heading">
+              <div><strong id="previewTitle">原版式预览</strong><span id="ocrMeta"></span></div>
+              <div id="pageControls" class="page-controls hidden">
+                <button id="pagePreviousButton" class="page-button" aria-label="上一页">←</button>
+                <span id="pageIndicator">1 / 1</span>
+                <button id="pageNextButton" class="page-button" aria-label="下一页">→</button>
+              </div>
+              <span id="mappingState" class="mapping-state">坐标映射有效</span>
+            </div>
+            <div id="imageCanvas" class="image-canvas">
+              <img id="imageElement" alt="OCR 原图预览">
+              <div id="imageOverlay" class="image-overlay" aria-hidden="true"></div>
+            </div>
+            <div id="ocrCorrectionPanel" class="ocr-correction-panel hidden">
+              <div class="ocr-correction-heading">
+                <div>
+                  <strong>低置信度人工校正</strong>
+                  <span id="ocrCorrectionSummary">0 项待复核</span>
+                </div>
+                <button id="ocrCorrectionApplyButton" class="button button-dark button-small">应用校正并重建坐标</button>
+              </div>
+              <div id="ocrCorrectionList" class="ocr-correction-list"></div>
+            </div>
+          </div>
+          <div class="editor-tabs">
+            <button class="editor-tab active" data-tab="source">原始内容</button>
+            <button class="editor-tab" data-tab="redacted">脱敏预览</button>
+          </div>
+          <textarea id="sourceEditor" class="document-editor" spellcheck="false" aria-label="文档内容"></textarea>
+          <textarea id="redactedEditor" class="document-editor hidden" spellcheck="false" readonly aria-label="脱敏预览"></textarea>
+        </div>
+
+        <section id="restorePanel" class="restore-panel hidden module-hidden">
+          <div class="restore-heading">
+            <div>
+              <div class="section-kicker">可逆工作流</div>
+              <h2>逆脱敏</h2>
+              <p>映射只存在于当前已解锁的 AES 仓库会话中。</p>
+            </div>
+            <label>AI 做了什么？
+              <select id="restoreMode">
+                <option value="analysis">分析、摘要或预测</option>
+                <option value="rewrite">整理或修改全文</option>
+              </select>
+            </label>
+          </div>
+          <div class="restore-grid">
+            <label>AI 返回的含代号内容
+              <textarea id="restoreInput" spellcheck="false" placeholder="粘贴 AI 返回的内容"></textarea>
+            </label>
+            <label>逆脱敏结果
+              <textarea id="restoreOutput" spellcheck="false" readonly></textarea>
+            </label>
+          </div>
+          <div class="restore-actions">
+            <div id="restoreReport" class="restore-report">载入可逆仓库记录后开始。</div>
+            <button id="restoreButton" class="button button-dark">开始逆脱敏</button>
+            <button id="restoreExportButton" class="button button-accent" disabled>导出逆脱敏文本</button>
+            <button id="restoreOfficeButton" class="button button-ghost">原格式恢复 DOCX/XLSX/PDF/CSV</button>
+          </div>
+        </section>
+
+        <section id="findingsPanel" class="findings-panel hidden" data-redact-view>
+          <div class="findings-heading">
+            <div>
+              <div class="section-kicker">人工复核</div>
+              <h2>识别结果</h2>
+            </div>
+            <div class="export-actions">
+              <button id="exportJsonButton" class="button button-ghost">导出审计 JSON</button>
+              <button id="exportOcrTextButton" class="button button-ghost hidden">导出识别 TXT</button>
+              <button id="exportImageButton" class="button button-dark hidden">导出涂黑图片</button>
+              <button id="exportOfficeButton" class="button button-dark hidden">导出原格式文档</button>
+              <button id="exportCsvButton" class="button button-dark hidden">导出原格式 CSV</button>
+              <button id="exportTextButton" class="button button-accent">导出脱敏文本</button>
+            </div>
+          </div>
+          <div id="findingList" class="finding-list"></div>
+        </section>
+      </section>
+    </main>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </div>
+
+  <dialog id="pasteTextDialog" class="vault-dialog paste-text-dialog">
+    <form id="pasteTextForm" method="dialog">
+      <div class="section-kicker">快速导入</div>
+      <h2>粘贴文字</h2>
+      <p>内容只进入当前本地会话；载入后仍可逐项核对并导出副本。</p>
+      <label for="pasteTextName">文档名称</label>
+      <input id="pasteTextName" type="text" maxlength="80" value="粘贴文字" autocomplete="off">
+      <label for="pasteTextInput">文字内容</label>
+      <textarea id="pasteTextInput" rows="12" maxlength="2000000" placeholder="在这里粘贴需要脱敏的文字" required></textarea>
+      <div id="pasteTextCounter" class="paste-text-counter">0 字符 · 0 bytes</div>
+      <div id="pasteTextError" class="vault-dialog-error" role="alert"></div>
+      <div class="vault-dialog-actions">
+        <button id="pasteTextCancel" type="button" class="button button-ghost">取消</button>
+        <button type="submit" class="button button-accent">载入并识别</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="vaultPasswordDialog" class="vault-dialog">
+    <form id="vaultPasswordForm" method="dialog">
+      <div class="section-kicker">本地密钥</div>
+      <h2 id="vaultDialogTitle">输入仓库密码</h2>
+      <p id="vaultDialogDescription">密码只在当前解锁会话的内存中使用。</p>
+      <label for="vaultPassword">密码</label>
+      <input id="vaultPassword" type="password" minlength="10" maxlength="256" autocomplete="new-password" required>
+      <label id="vaultConfirmLabel" for="vaultPasswordConfirm">确认密码</label>
+      <input id="vaultPasswordConfirm" type="password" minlength="10" maxlength="256" autocomplete="new-password">
+      <div id="vaultDialogError" class="vault-dialog-error" role="alert"></div>
+      <div class="vault-dialog-actions">
+        <button id="vaultDialogCancel" type="button" class="button button-ghost">取消</button>
+        <button type="submit" class="button button-dark">确认</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="pdfPasswordDialog" class="vault-dialog">
+    <form id="pdfPasswordForm" method="dialog">
+      <div class="section-kicker">加密 PDF</div>
+      <h2>输入文档密码</h2>
+      <p id="pdfPasswordDescription">密码仅用于本次内存解密，不会写入磁盘、日志或仓库。</p>
+      <label for="pdfPassword">密码</label>
+      <input id="pdfPassword" type="password" maxlength="1024" autocomplete="current-password" required>
+      <div id="pdfPasswordError" class="vault-dialog-error" role="alert"></div>
+      <div class="vault-dialog-actions">
+        <button id="pdfPasswordCancel" type="button" class="button button-ghost">取消</button>
+        <button type="submit" class="button button-dark">在内存中打开</button>
+      </div>
+    </form>
+  </dialog>
+  <script type="module" src="./renderer.mjs"></script>
+</body>
+</html>

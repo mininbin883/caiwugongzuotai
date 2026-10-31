@@ -1,0 +1,40 @@
+{
+  "format": "MOYIN_YINYE_GITHUB_UPLOAD_V1",
+  "generatedAt": "2026-10-31T18:43:12+0800",
+  "repository": "mininbin883/caiwugongzuotai",
+  "assets": [
+    {
+      "name": "VeilForge-2.14.1-win-unpacked.zip",
+      "kind": "墨隐 Windows 完整包",
+      "path": "D:\\360安全浏览器下载\\UCODE\\yinye-cleanroom-clone\\release39-v2.14.1\\VeilForge-2.14.1-win-unpacked.zip",
+      "bytes": 880381859,
+      "sha256": "847B8B127617DAE73174D64C8A8756418011B5D58CC56817D8F75EDF11F72C3D"
+    },
+    {
+      "name": "VeilForge-2.14.1-source.zip",
+      "kind": "墨隐源代码快照",
+      "path": "D:\\360安全浏览器下载\\UCODE\\github-upload-stage\\VeilForge-2.14.1-source.zip",
+      "bytes": 318163,
+      "sha256": "B03FFDD1F2129DAF400CB8D93BB8F787D065645E29F81446EF38A15783B53FA0"
+    },
+    {
+      "name": "Yinye-1.0.0.9-win-x64-clean.zip",
+      "kind": "隐页 Windows 干净运行包",
+      "path": "D:\\360安全浏览器下载\\UCODE\\github-upload-stage\\Yinye-1.0.0.9-win-x64-clean.zip",
+      "bytes": 1072466320,
+      "sha256": "9DA3B8863FA1B2F5C0054BE83B03C73ED7B6232DACD66860B740A53B26A1892F"
+    }
+  ],
+  "yinyeSourceManifest": {
+    "productVersion": "1.0.0.9",
+    "engineVersion": "0.5.2",
+    "files": 2653,
+    "totalBytes": 1071499744,
+    "excludedRuntimeData": [
+      "data/history",
+      "data/license",
+      "data/session",
+      "data/settings"
+    ]
+  }
+}
