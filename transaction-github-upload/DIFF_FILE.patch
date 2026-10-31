@@ -1,15 +1,16 @@
 diff --git a/.gitattributes b/.gitattributes
 new file mode 100644
-index 0000000..a391dd1
+index 0000000..31699af
 --- /dev/null
 +++ b/.gitattributes
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,7 @@
 +* text=auto
 +*.png binary
 +*.jpg binary
 +*.jpeg binary
 +*.xlsx binary
 +*.zip binary
++*.sh text eol=lf
 diff --git a/.gitignore b/.gitignore
 new file mode 100644
 index 0000000..f23bdb5
@@ -24765,10 +24766,10 @@ index 0000000..c806e35
 +esac
 diff --git a/transaction-github-upload/VERIFICATION.txt b/transaction-github-upload/VERIFICATION.txt
 new file mode 100644
-index 0000000..8340866
+index 0000000..e8bf432
 --- /dev/null
 +++ b/transaction-github-upload/VERIFICATION.txt
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,95 @@
 +GITHUB UPLOAD VERIFICATION — 墨隐 v2.14.1 + 隐页 v1.0.0.9
 +Date: 2026-10-31 Asia/Shanghai
 +Repository: https://github.com/mininbin883/caiwugongzuotai
@@ -24819,6 +24820,51 @@ index 0000000..8340866
 +
 +REMOTE PUSH / RELEASE / ROLLBACK
 +Pending final receipts.
++
++REMOTE PUSH
++Command: git push origin main
++Input: local commit 7b423f6b0c629cfad99a9c33a5e6ad85c61b7493 on main
++Literal output:
++To https://github.com/mininbin883/caiwugongzuotai.git
++   f98efe9..7b423f6  main -> main
++Exit status: 0
++Result: repository source, manifests and transaction evidence reached origin/main.
++
++RELEASE
++Create command: gh release create software-bundle-2026.10.31 --repo mininbin883/caiwugongzuotai --target main --title "墨隐 v2.14.1 + 隐页 v1.0.0.9" --notes-file RELEASE-NOTES.md VeilForge-2.14.1-source.zip SHA256SUMS.txt UPLOAD-MANIFEST.json
++Literal output:
++https://github.com/mininbin883/caiwugongzuotai/releases/tag/software-bundle-2026.10.31
++Exit status: 0
++
++Upload command 1: gh release upload software-bundle-2026.10.31 VeilForge-2.14.1-win-unpacked.zip --repo mininbin883/caiwugongzuotai --clobber
++Literal output: (empty)
++Exit status: 0
++Upload command 2: gh release upload software-bundle-2026.10.31 Yinye-1.0.0.9-win-x64-clean.zip --repo mininbin883/caiwugongzuotai --clobber
++Literal output: (empty)
++Exit status: 0
++
++Remote asset verification command: gh release view software-bundle-2026.10.31 --repo mininbin883/caiwugongzuotai --json url,tagName,targetCommitish,isDraft,isPrerelease,assets
++Literal result:
++VeilForge-2.14.1-win-unpacked.zip size=880381859 state=uploaded digest=sha256:847b8b127617dae73174d64c8a8756418011b5d58cc56817d8f75edf11f72c3d
++VeilForge-2.14.1-source.zip size=318163 state=uploaded digest=sha256:b03ffdd1f2129daf400cb8d93bb8f787d065645e29f81446ef38a15783b53fa0
++Yinye-1.0.0.9-win-x64-clean.zip size=1072466320 state=uploaded digest=sha256:9da3b8863fa1b2f5c0054be83b03c73ed7b6232dacd66860b740a53b26a1892f
++SHA256SUMS.txt size=295 state=uploaded
++UPLOAD-MANIFEST.json size=1442 state=uploaded
++Release state: isDraft=false; isPrerelease=false; targetCommitish=main
++Exit status: 0
++Result: all three local hashes equal GitHub's computed release-asset digests.
++
++ROLLBACK
++Command: D:/360Downloads/Git/bin/bash.exe transaction-github-upload/ROLLBACK.sh D:/360安全浏览器下载/UCODE/caiwugongzuotai-rollback-test-20261031 --local
++Input: separate clone at D:/360安全浏览器下载/UCODE/caiwugongzuotai-rollback-test-20261031
++Literal output:
++ROLLBACK_OK mode=local root=D:/360安全浏览器下载/UCODE/caiwugongzuotai-rollback-test-20261031 head=f98efe931920abe20023681080fc5d155e86dc9f
++Exit status: 0
++Rollback verification command: node transaction-github-upload/probe-upload.cjs D:/360安全浏览器下载/UCODE/caiwugongzuotai-rollback-test-20261031
++Literal output:
++GITHUB_UPLOAD_PROBE 0/10 root=D:\360安全浏览器下载\UCODE\caiwugongzuotai-rollback-test-20261031 failed=root-readme,moyin-version,moyin-main,moyin-tests,yinye-version,yinye-clean-metadata,asset-manifest,checksums,transaction-modified,rollback-script
++Exit status: 1 (expected restored-baseline state)
++Restored behavior/status: separate clone restored to f98efe931920abe20023681080fc5d155e86dc9f; uploaded README/source/manifests/transaction files absent. Live main and release remain published.
 diff --git a/transaction-github-upload/original-tree/36969 b/transaction-github-upload/original-tree/36969
 new file mode 100644
 index 0000000..62a18c3

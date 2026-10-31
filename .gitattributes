@@ -4,3 +4,4 @@
 *.jpeg binary
 *.xlsx binary
 *.zip binary
+*.sh text eol=lf
