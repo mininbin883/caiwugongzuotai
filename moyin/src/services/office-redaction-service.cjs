@@ -398,7 +398,9 @@ async function renderDocx(session, findings) {
 
 function patchWorksheetXml(xml, replacements) {
   let changed = 0;
-  const output = xml.replace(/<([A-Za-z_][\w.-]*:)?c\b([^>]*)>([\s\S]*?)<\/\1c>/gi, (full, prefix = '', attributes) => {
+  // 空单元格常写成自闭合形式 <c r="Q6" s="2"/>（WPS 导出很常见）：必须单独识别，
+  // 否则会把它和后一个单元格当成一个，后一个单元格就找不到了。
+  const output = xml.replace(/<([A-Za-z_][\w.-]*:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1c>)/gi, (full, prefix = '', attributes) => {
     const address = attributeValue(attributes, 'r');
     if (!replacements.has(address)) return full;
     let updatedAttributes = attributes.replace(/\s+t=(['"])[\s\S]*?\1/i, '');

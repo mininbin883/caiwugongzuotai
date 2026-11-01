@@ -133,3 +133,14 @@ test('工作表名称中的敏感信息：导出改名（含公式引用），�
   assert.equal(restored.Sheets['汇总'].B2.v, '张三');
   await fsModule.rm(directory, { recursive: true, force: true });
 });
+
+test('自闭合的空单元格（WPS 常见 <c r="Q6" s="2"/>）后面的单元格可以正常改写', async () => {
+  const office = (await import('../src/services/office-redaction-service.cjs')).default;
+  const xml = '<sheetData><row r="6"><c r="P6" s="2" t="s"><v>1</v></c><c r="Q6" s="2"/><c r="R6" s="2" t="s"><v>2</v></c><c r="S6" s="2"><v>3</v></c></row></sheetData>';
+  const patched = office.patchWorksheetXml(xml, new Map([['R6', '[MI_ABCDEF12_001]']]));
+  assert.equal(patched.changed, 1);
+  assert.ok(patched.xml.includes('<c r="Q6" s="2"/>'));
+  assert.ok(patched.xml.includes('<c r="R6" s="2" t="inlineStr"><is><t xml:space="preserve">[MI_ABCDEF12_001]</t></is></c>'));
+  assert.ok(patched.xml.includes('<c r="S6" s="2"><v>3</v></c>'));
+  assert.ok(patched.xml.includes('<c r="P6" s="2" t="s"><v>1</v></c>'));
+});
