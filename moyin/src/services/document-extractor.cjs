@@ -46,7 +46,13 @@ async function extractPdf(bytes) {
 function extractWorkbook(bytes) {
   const workbook = XLSX.read(bytes, { type: 'buffer', cellDates: false, cellNF: false, cellStyles: false });
   return workbook.SheetNames.map((name) => {
-    const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[name], { FS: '\t', blankrows: false });
+    const sheet = workbook.Sheets[name];
+    // 部分财务软件导出的 .xls 把货币符号写成乱码（格式为 "å"#,##0.00），数字格只保留正常的数字显示。
+    for (const [address, cell] of Object.entries(sheet)) {
+      if (address[0] === '!' || cell?.t !== 'n' || typeof cell.w !== 'string') continue;
+      if (/[\u00C0-\u024F]/u.test(cell.w)) cell.w = cell.w.replace(/[\u00C0-\u024F]+/gu, '').trim() || String(cell.v);
+    }
+    const csv = XLSX.utils.sheet_to_csv(sheet, { FS: '\t', blankrows: false });
     return `【工作表：${name}】\n${csv}`;
   }).join('\n\n');
 }

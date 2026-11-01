@@ -69,3 +69,25 @@ test('数字格里乱码的货币符号（如“å52,500.00”）在提取时去
   assert.ok(!document.text.includes('å'));
   await fsModule.rm(directory, { recursive: true, force: true });
 });
+
+test('旧版 .xls 先转为 .xlsx 再按原格式处理，乱码货币格式被清理', async () => {
+  const XLSX = (await import('xlsx')).default;
+  const os = await import('node:os');
+  const pathModule = await import('node:path');
+  const fsModule = await import('node:fs/promises');
+  const { convertXlsToXlsx, extractOfficeDocument } = (await import('../src/services/office-redaction-service.cjs')).default;
+  const sheet = XLSX.utils.aoa_to_sheet([['科目代码', '科目名称', '期初借方'], ['1221', '其他应收款', 0], ['1221.001', '示例人', 52500]]);
+  sheet.C3.z = '"å"#,##0.00';
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, sheet, '科目余额表');
+  const directory = await fsModule.mkdtemp(pathModule.join(os.tmpdir(), 'moyin-xls-'));
+  const input = pathModule.join(directory, 'ledger.xls');
+  const output = pathModule.join(directory, 'converted.xlsx');
+  XLSX.writeFile(book, input, { bookType: 'biff8' });
+  await convertXlsToXlsx(input, output);
+  const document = await extractOfficeDocument(output);
+  assert.ok(document.text.includes('1221.001\t示例人\t52,500.00'));
+  assert.ok(!document.text.includes('å'));
+  assert.equal(document.session.kind, 'xlsx');
+  await fsModule.rm(directory, { recursive: true, force: true });
+});

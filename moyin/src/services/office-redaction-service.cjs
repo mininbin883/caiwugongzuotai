@@ -273,6 +273,27 @@ async function extractXlsx(zip, sourceBytes, filePath, originalBytes, longTailRe
   };
 }
 
+// 旧版 .xls 先在本机工作目录里转成 .xlsx，再走 Excel 原格式处理；数据、公式与多工作表保留，单元格样式可能简化。
+async function convertXlsToXlsx(inputPath, outputPath) {
+  if (typeof inputPath !== 'string' || !path.isAbsolute(inputPath)) throw new Error('LOCAL_PATH_INVALID');
+  if (typeof outputPath !== 'string' || !path.isAbsolute(outputPath)) throw new Error('LOCAL_PATH_INVALID');
+  const bytes = await fs.readFile(inputPath);
+  const workbook = XLSX.read(bytes, { type: 'buffer', cellNF: true, cellFormula: true, cellDates: false });
+  for (const name of workbook.SheetNames) {
+    for (const [address, cell] of Object.entries(workbook.Sheets[name])) {
+      if (address[0] === '!' || !cell || typeof cell.z !== 'string') continue;
+      // 去掉格式里乱码的货币符号（如 "å"#,##0.00），避免副本里继续显示乱码。
+      if (/[\u00C0-\u024F]/u.test(cell.z)) {
+        cell.z = cell.z.replace(/"[\u00C0-\u024F]+"/gu, '').replace(/[\u00C0-\u024F]+/gu, '');
+        delete cell.w;
+      }
+    }
+  }
+  const output = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx', compression: true });
+  await fs.writeFile(outputPath, output);
+  return { outputPath, sheets: workbook.SheetNames.length };
+}
+
 async function extractOfficeDocument(filePath) {
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('LOCAL_PATH_INVALID');
   const extension = path.extname(filePath).toLowerCase();
@@ -387,6 +408,7 @@ async function restoreReversibleOffice(inputPath, mapping, outputPath) {
 }
 
 module.exports = {
+  convertXlsToXlsx,
   OFFICE_EXTENSIONS,
   MAX_OFFICE_BYTES,
   extractOfficeDocument,

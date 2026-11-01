@@ -52,3 +52,50 @@ test('混合列（人名占比不到六成）中的人名标为需核对', () =>
   assert.equal(persons.length, 3);
   assert.ok(persons.every((item) => item.reviewRequired));
 });
+
+const HIERARCHY = [
+  '科目代码\t科目名称\t币别\t期初借方余额\t期初贷方余额',
+  '1001\t库存现金\t人民币\t27,862.91\t0.00',
+  '1122\t应收账款\t人民币\t0.00\t0.00',
+  '1122.001\t示例交通局\t人民币\t0.00\t0.00',
+  '1122.009\t示例投资公司.2号3号桥\t人民币\t0.00\t0.00',
+  '1122.020\t青禾绿化\t人民币\t0.00\t0.00',
+  '1123\t预付账款\t人民币\t0.00\t0.00',
+  '1123.002\t利昌路\t人民币\t0.00\t0.00',
+  '1123.002.001\t曹一民\t人民币\t0.00\t0.00',
+  '1221\t其他应收款\t人民币\t0.00\t0.00',
+  '1221.001\t杜一国\t人民币\t0.00\t0.00',
+  '1221.010\t吴二华保证金\t人民币\t0.00\t0.00',
+  '1221.013\t郎三考核\t人民币\t0.00\t0.00',
+  '1221.112\t夏七个人借款\t人民币\t0.00\t0.00',
+  '1221.014\t牛四桂（禁用）\t人民币\t0.00\t0.00',
+  '1221.015\t王五镇\t人民币\t0.00\t0.00',
+  '1221.016\t车队\t人民币\t0.00\t0.00',
+  '1221.017\t拌合站\t人民币\t0.00\t0.00',
+  '1403\t原材料\t人民币\t0.00\t0.00',
+  '1403.02.001\t石粉\t人民币\t0.00\t0.00',
+  '1403.02.002\t石灰\t人民币\t0.00\t0.00',
+  '4001\t实收资本\t人民币\t0.00\t0.00',
+  '4001.02\t职工持股\t人民币\t0.00\t0.00',
+  '4001.02.001\t高六函\t人民币\t0.00\t0.00',
+  '6602\t管理费用\t人民币\t0.00\t0.00',
+  '6602.01\t差旅费\t人民币\t0.00\t0.00'
+].join('\n');
+
+test('科目余额表：往来科目下各级明细中的人名（含后缀、括号写法）都能识别', () => {
+  const result = analyzeText(HIERARCHY);
+  const persons = of(result, 'person').map((item) => item.value);
+  for (const name of ['夏七', '曹一民', '杜一国', '吴二华', '郎三', '牛四桂', '王五镇', '高六函']) assert.ok(persons.includes(name), name);
+  assert.equal(result.findings.find((item) => item.value === '杜一国').hint, '往来明细：其他应收款');
+  assert.equal(result.findings.find((item) => item.value === '王五镇').reviewRequired, true);
+});
+
+test('科目余额表：项目名、材料、车队等不当作人名；单位与简称列出', () => {
+  const result = analyzeText(HIERARCHY);
+  const persons = of(result, 'person').map((item) => item.value);
+  for (const word of ['利昌路', '车队', '拌合站', '石粉', '石灰', '差旅费', '职工持股']) assert.ok(!persons.includes(word), word);
+  const companies = of(result, 'company').map((item) => item.value);
+  assert.ok(companies.includes('示例投资公司'));
+  assert.ok(companies.includes('示例交通局'));
+  assert.ok(companies.includes('青禾绿化'));
+});

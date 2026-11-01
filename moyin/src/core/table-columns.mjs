@@ -1,7 +1,7 @@
 // 按表头识别表格列：Excel/CSV 导出的台账里，姓名、单位名称等只出现在格子里，没有“联系人：”这样的前缀。
 // 先找表头行，再把对应列下面每一格的值按列的类型识别。支持制表符分隔（Excel 提取结果）和简单逗号分隔。
 
-export const COMMON_SURNAMES = new Set([...'王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付傅方白邹孟熊秦邱江尹薛闫阎段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤常温康施文牛樊葛邢安齐易乔伍庞颜倪庄聂章鲁岳翟殷詹申欧耿关兰焦俞左柳甘祝包宁尚符舒阮柯纪梅童凌毕单季裴霍涂成苗谷盛曲翁冉骆蓝路游辛靳管柴蒙鲍华喻祁蒲房滕屈饶解牟艾尤阳时穆农司卓古吉缪简车项连芦麦褚娄窦戚岑景党宫费卜冷晏席卫米柏宗瞿桂全佟应臧闵苟邬边卞姬师和仇栾隋商刁沙荣巫寇桑郎甄丛仲虞敖巩明佘池查麻苑迟邝嵇郜逄冀相佐鞠芮宦蔺']);
+export const COMMON_SURNAMES = new Set([...'王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付傅方白邹孟熊秦邱江尹薛闫阎段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤常温康施文牛樊葛邢安齐易乔伍庞颜倪庄聂章鲁岳翟殷詹申欧耿关兰焦俞左柳甘祝包宁尚符舒阮柯纪梅童凌毕单季裴霍涂成苗谷盛曲翁冉骆蓝路游辛靳管柴蒙鲍华喻祁蒲房滕屈饶解牟艾尤阳时穆农司卓古吉缪简车项连芦麦褚娄窦戚岑景党宫费卜冷晏席卫米柏宗瞿桂全佟应臧闵苟邬边卞姬师和仇栾隋商刁沙荣巫寇桑郎甄丛仲虞敖巩明佘池查麻苑迟邝嵇郜逄冀相佐鞠芮宦蔺胥伦历禹扈訾隗邴笪仉璩厉阚檀']);
 export const COMPOUND_SURNAMES = ['欧阳', '司马', '上官', '诸葛', '东方', '皇甫', '尉迟', '公孙', '慕容', '令狐', '长孙', '宇文', '司徒', '夏侯', '端木', '轩辕', '澹台', '呼延', '万俟', '闻人', '西门', '南宫'];
 
 export function looksLikeSurname(name) {
@@ -145,7 +145,10 @@ export function collectTableColumns(input, enabledTypes) {
     if (lineEnd >= text.length) break;
     lineStart = lineEnd + 1;
   }
-  if (enabledTypes.has('person') || enabledTypes.has('company')) results.push(...inferColumnsByContent(text, enabledTypes));
+  if (enabledTypes.has('person') || enabledTypes.has('company')) {
+    results.push(...inferAccountLedger(text, enabledTypes));
+    results.push(...inferColumnsByContent(text, enabledTypes));
+  }
   return results;
 }
 
@@ -242,6 +245,129 @@ function inferBlock(text, block, enabledTypes) {
       for (const item of column.orgs) {
         results.push({ type: 'company', value: item.value, start: item.start, end: item.start + item.value.length, hint: `按内容推断：${header}中的单位名称`, reviewRequired: !/公司|集团/u.test(item.value) });
       }
+    }
+  }
+  return results;
+}
+
+// ---------- 科目余额表 / 往来明细：按科目层级识别往来对象 ----------
+// 第一列是科目代码（1221、1221.001、1123.004.001 ……）。往来类科目（应收、应付、预付、其他应收/应付、备用金、
+// 借款、保证金、职工等）下面的各级明细就是往来对象：人名、单位，或“单位.项目”。
+
+const ACCOUNT_CODE = /^\d{3,6}(?:\.[0-9A-Za-z]{1,6}){0,5}$/u;
+const COUNTERPARTY_ACCOUNT = /应收|应付|预付|预收|往来|备用金|借款|暂借|押金|保证金|职工|员工|个人|内部|合同资产|合同负债|代垫|垫付|周转金|实收资本|股本|股东|投资者|出资|持股/u;
+// 名字后面可能连着多个后缀：“夏伟个人借款”“吴洁华保证金”“郎波考核”。
+const NAME_SUFFIX = /^(\p{Script=Han}{2,3}?)(?:个人|员工|职工)?(?:保证金|押金|借款|暂借款?|备用金|考核|工资|奖金|报销|垫付|往来|欠款|还款|罚款|奖励|个人)+$/u;
+const ORG_TAIL = /(?:公司|集团|局|院|所|中心|站|厂|社|委员会|委|办|学校|学院|大学|医院|银行|支行|分行|协会|商会|合作社)$/u;
+// 工程项目、地点类明细（“双昌路挖补”“五标段”“一号车间”）不是往来对象。
+const PROJECT_HINT = /[路街桥巷]|标段|工程|项目|改造|挖补|大修|维修|管道|管网|污水|雨水|排水|道路|车间|基地|小区|花园|广场|名都|宿舍|厂房|\d/u;
+// 以地名用字结尾的两三个字：姓氏开头时仍可能是人名（如“王均镇”），按需核对处理。
+const PLACE_TAIL = /[路街桥道巷村庄镇区县市省河湖湾港沟渠]$/u;
+// 往来明细里常见、但不是人名的短词。
+const NOT_PERSON = new Set(['车队', '拌合站', '拌和站', '正式工', '临时工', '合同工', '农民工', '分包', '内部分包', '保函', '履约', '碧桂园', '中行', '工行', '农行', '建行', '中冶', '中环', '中铁', '实力', '平度', '信达', '弘联', '大海洋', '东珠', '项目部', '经理部', '指挥部', '财务部', '工程部', '办公室', '食堂', '车间', '班组', '工地', '施工队', '劳务队', '个人', '其他', '其它', '禁用', '停用']);
+const NON_PERSON_TAIL = /[站队园部组班处厂司局院所校社委办]$/u;
+
+function segmentsWithOffsets(value) {
+  // “滨海投资公司.2号3号桥”“牛庆桂（禁用）”“2013年暂借款禁用” 按点号、括号拆开。
+  const parts = [];
+  const pattern = /[^.．。()（）\[\]【】、,，/\s]+/gu;
+  for (const match of value.matchAll(pattern)) parts.push({ text: match[0], offset: match.index });
+  return parts;
+}
+
+function counterpartyCandidates(cell, cellStart) {
+  const out = [];
+  for (const segment of segmentsWithOffsets(cell)) {
+    const value = segment.text.replace(/(?:禁用|停用|作废|注销)$/u, '');
+    const start = cellStart + segment.offset;
+    if (!value || NAME_STOPWORDS.has(value)) continue;
+    const suffixed = value.match(NAME_SUFFIX);
+    if (suffixed && !NOT_PERSON.has(suffixed[1]) && !BUSINESS_PREFIXES.has(suffixed[1].slice(0, 2))) {
+      out.push({ type: 'person', value: suffixed[1], start, reviewRequired: !looksLikeSurname(suffixed[1]) });
+      continue;
+    }
+    if (/^\p{Script=Han}{2,3}$/u.test(value)) {
+      if (NOT_PERSON.has(value) || BUSINESS_PREFIXES.has(value.slice(0, 2)) || PROJECT_HINT.test(value) || /[费款税账金额息]$/u.test(value)) continue;
+      if (NON_PERSON_TAIL.test(value)) continue;
+      const placeTail = PLACE_TAIL.test(value);
+      if (placeTail && !looksLikeSurname(value)) continue;
+      out.push({ type: 'person', value, start, reviewRequired: placeTail || !looksLikeSurname(value) });
+      continue;
+    }
+    if (/^\p{Script=Han}[\p{Script=Han}（）()]{3,40}$/u.test(value)) {
+      if (ORG_TAIL.test(value)) {
+        out.push({ type: 'company', value, start, reviewRequired: !/公司|集团/u.test(value) });
+      } else if (value.length <= 8 && !PROJECT_HINT.test(value) && !PLACE_TAIL.test(value) && !NOT_PERSON.has(value) && !BUSINESS_PREFIXES.has(value.slice(0, 2)) && !/[费款税账金]$/u.test(value)) {
+        // “青欣绿化”“奎文市政”这类简称：可能是单位，也可能是项目，列出并标为需核对。
+        out.push({ type: 'company', value, start, reviewRequired: true });
+      }
+    }
+  }
+  return out;
+}
+
+function inferAccountLedger(text, enabledTypes) {
+  const results = [];
+  const rows = [];
+  const flush = () => {
+    if (rows.length >= 5) results.push(...inferLedgerRows(rows, enabledTypes));
+    rows.length = 0;
+  };
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    let lineEnd = text.indexOf('\n', lineStart);
+    if (lineEnd < 0) lineEnd = text.length;
+    let line = text.slice(lineStart, lineEnd);
+    if (line.endsWith('\r')) line = line.slice(0, -1);
+    if (/^【工作表[:：]/u.test(line)) flush();
+    else if (line.includes('\t')) rows.push({ lineStart, line });
+    if (lineEnd >= text.length) break;
+    lineStart = lineEnd + 1;
+  }
+  flush();
+  return results;
+}
+
+function inferLedgerRows(rows, enabledTypes) {
+  const parsed = rows.map(({ lineStart, line }) => {
+    const cells = splitLine(line, '\t');
+    const code = line.slice(cells[0].start, cells[0].end).trim();
+    let nameCell = null;
+    for (let index = 1; index < Math.min(cells.length, 4); index += 1) {
+      const [start, end] = trimRange(line, cells[index].start, cells[index].end);
+      if (end > start && /\p{Script=Han}/u.test(line.slice(start, end))) {
+        nameCell = { value: line.slice(start, end), start: lineStart + start };
+        break;
+      }
+    }
+    return { code, nameCell };
+  });
+  const coded = parsed.filter((row) => ACCOUNT_CODE.test(row.code));
+  // 至少八成行的第一列是科目代码，才按科目余额表处理。
+  if (coded.length < 5 || coded.length < parsed.length * 0.8) return [];
+  const nameByCode = new Map(coded.filter((row) => row.nameCell).map((row) => [row.code, row.nameCell.value]));
+  const results = [];
+  for (const row of coded) {
+    if (!row.nameCell || !row.code.includes('.')) continue;
+    // 任一上级科目是往来类，才把这一行当作往来对象。
+    const segments = row.code.split('.');
+    let counterparty = false;
+    for (let depth = 1; depth < segments.length && !counterparty; depth += 1) {
+      const ancestor = nameByCode.get(segments.slice(0, depth).join('.'));
+      if (ancestor && COUNTERPARTY_ACCOUNT.test(ancestor)) counterparty = true;
+    }
+    if (!counterparty) continue;
+    const topName = nameByCode.get(segments[0]) || '往来科目';
+    for (const item of counterpartyCandidates(row.nameCell.value, row.nameCell.start)) {
+      if (!enabledTypes.has(item.type)) continue;
+      results.push({
+        type: item.type,
+        value: item.value,
+        start: item.start,
+        end: item.start + item.value.length,
+        hint: `往来明细：${topName}`,
+        reviewRequired: item.reviewRequired
+      });
     }
   }
   return results;

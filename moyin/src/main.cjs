@@ -31,7 +31,7 @@ const { validatePdfA } = require('./services/pdf-validation-service.cjs');
 const { signPdfWithP12, signPdfWithExternalSigner } = require('./services/pdf-signing-service.cjs');
 const { P12Signer } = require('@signpdf/signer-p12');
 const { extractSignature } = require('@signpdf/utils');
-const { OFFICE_EXTENSIONS, extractOfficeDocument, renderRedactedOffice, restoreReversibleOffice } = require('./services/office-redaction-service.cjs');
+const { OFFICE_EXTENSIONS, extractOfficeDocument, renderRedactedOffice, restoreReversibleOffice, convertXlsToXlsx } = require('./services/office-redaction-service.cjs');
 const { extractCsvDocument, renderRedactedCsv } = require('./services/csv-redaction-service.cjs');
 const { SerialTaskQueue } = require('./services/task-queue.cjs');
 const { BoundedWorkerPool } = require('./services/worker-pool.cjs');
@@ -556,7 +556,7 @@ async function processDocumentPathInternal(filePath, options = {}) {
       csv: { token, kind: 'csv', ...csv.metadata }
     };
   }
-  if (extension !== '.pdf' && !IMAGE_EXTENSIONS.includes(extension) && !OFFICE_EXTENSIONS.includes(extension)) {
+  if (extension !== '.pdf' && extension !== '.xls' && !IMAGE_EXTENSIONS.includes(extension) && !OFFICE_EXTENSIONS.includes(extension)) {
     return extractDocument(filePath);
   }
   const budget = createResourceBudget({ profile: 'parity' });
@@ -568,11 +568,20 @@ async function processDocumentPathInternal(filePath, options = {}) {
   });
   let retained = false;
   try {
-  if (OFFICE_EXTENSIONS.includes(extension)) {
-    const office = await extractOfficeDocument(workspace.inputPath);
+  if (OFFICE_EXTENSIONS.includes(extension) || extension === '.xls') {
+    let officeInput = workspace.inputPath;
+    let sessionName = workspace.sourceName;
+    if (extension === '.xls') {
+      // 旧版 .xls：在本机工作目录转成 .xlsx 后按原格式处理，副本以 .xlsx 导出。
+      officeInput = path.join(path.dirname(workspace.inputPath), 'converted-from-xls.xlsx');
+      await convertXlsToXlsx(workspace.inputPath, officeInput);
+      sessionName = `${path.parse(workspace.sourceName).name}.xlsx`;
+    }
+    const office = await extractOfficeDocument(officeInput);
     const token = randomUUID();
     office.name = workspace.sourceName;
-    office.session.sourceName = workspace.sourceName;
+    office.session.sourceName = sessionName;
+    if (extension === '.xls') office.convertedFromXls = true;
     office.session.workspace = workspace;
     storeBoundedSession(officeSessions, token, office.session);
     retained = true;
@@ -582,7 +591,7 @@ async function processDocumentPathInternal(filePath, options = {}) {
       sourceBytes: office.sourceBytes,
       characters: office.characters,
       text: office.text,
-      office: { token, kind: office.session.kind },
+      office: { token, kind: office.session.kind, convertedFromXls: Boolean(office.convertedFromXls) },
       officeLongTailReport: office.longTailReport || null
     };
   }

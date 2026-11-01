@@ -1259,7 +1259,8 @@ function applyDocumentResult(result, message = '文档已在本机解析完成')
   const officeMeta = officeReport
     ? ` · 长尾 ${officeReport.detectedFeatures?.length || 0} 项 · 降级 ${officeReport.degradationCount || 0} 项`
     : '';
-  elements.documentMeta.textContent = `${result.extension.toUpperCase().slice(1)} · ${result.sourceBytes.toLocaleString('zh-CN')} bytes · 本地解析${csvMeta}${structureMeta}${compatibilityMeta}${signatureMeta}${officeMeta}`;
+  const xlsMeta = result.office?.convertedFromXls ? ' · 旧版 .xls 已在本机转为 .xlsx，副本以 .xlsx 导出（单元格样式可能简化）' : '';
+  elements.documentMeta.textContent = `${result.extension.toUpperCase().slice(1)} · ${result.sourceBytes.toLocaleString('zh-CN')} bytes · 本地解析${csvMeta}${structureMeta}${compatibilityMeta}${signatureMeta}${officeMeta}${xlsMeta}`;
   elements.charCount.textContent = result.characters.toLocaleString('zh-CN');
   elements.emptyState.classList.add('hidden');
   elements.editorState.classList.remove('hidden');
