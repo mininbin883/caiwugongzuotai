@@ -20,9 +20,12 @@ function prepareReversibleBatch(jobs, analysisOptions, engine, reversible, optio
   // 这样一个文件里认出的公司、人名，在其他文件里即使写法让规则认不出（如“支付××有限公司货款”），也会被隐藏。
   const batchTerms = collectBatchTerms(jobs, analysisOptions, engine);
   const mergedOptions = mergeTypedTerms(analysisOptions, batchTerms);
+  const shortNames = batchTerms.shortNames || new Set();
   for (const [index, job] of jobs.entries()) {
     const analysis = engine.analyzeText(job.result.text, { ...mergedOptions, style: 'mask' });
     const enabled = analysis.findings.filter((item) => item.enabled !== false);
+    enabled.push(...shortNameFindings(job.result.text, shortNames, analysis.findings));
+    enabled.sort((left, right) => left.start - right.start || left.end - right.end);
     const tokenized = tokenizer.tokenize(job.result.text, enabled);
     const tokenByRange = new Map(tokenized.assignments.map((item) => [`${item.start}:${item.end}`, item.token]));
     const findings = enabled
@@ -92,6 +95,12 @@ function collectBatchTerms(jobs, analysisOptions, engine) {
       const value = String(finding.value || '').trim();
       // 两个字的人名容易撞进其他词里（如“王宏”撞进“王宏伟”），不进本批词表；号码类由规则自身保证。
       const min = MIN_TERM_LENGTH[finding.type];
+      if (finding.type === 'person' && value.length === 2 && /^[\u4e00-\u9fa5]{2}$/u.test(value)) {
+        // 两个字的人名单独记下：只在整格就是这个名字、或跟在“名称：”等标签后时补上（见 shortNameFindings）。
+        if (!terms.shortNames) terms.shortNames = new Set();
+        terms.shortNames.add(value);
+        continue;
+      }
       if (!min || value.length < min || value.includes('\n')) continue;
       if (!terms.has(finding.type)) terms.set(finding.type, new Set());
       terms.get(finding.type).add(value);
@@ -100,10 +109,42 @@ function collectBatchTerms(jobs, analysisOptions, engine) {
   return terms;
 }
 
+const NAME_LABEL = /(?:名称|姓名|开票人|收款人|付款人|复核人|经手人|联系人|负责人|领款人|报销人|申请人|代开企业名称)\s*[:：]\s*$/u;
+
+/**
+ * 本批其他地方已认出的两个字人名：整格恰好是这个名字，或紧跟在“名称：”“经手人：”等标签后面（后面不再接汉字），补成隐藏项。
+ * 与已有识别结果重叠的位置不补。
+ */
+function shortNameFindings(text, shortNames, existing) {
+  if (!shortNames.size) return [];
+  const source = String(text || '');
+  const covered = (start, end) => existing.some((item) => item.start < end && start < item.end);
+  const added = [];
+  const push = (start, value, hint) => {
+    const end = start + value.length;
+    if (covered(start, end) || added.some((item) => item.start < end && start < item.end)) return;
+    added.push({ type: 'person', label: '姓名', value, start, end, confidence: 0.9, enabled: true, source: 'rule', hint });
+  };
+  // 整格
+  for (const match of source.matchAll(/(^|[\t\n])([^\t\n]+)(?=$|[\t\n\r])/gu)) {
+    const raw = match[2];
+    const value = raw.trim();
+    if (!shortNames.has(value)) continue;
+    push(match.index + match[1].length + raw.indexOf(value), value, '本批已识别的姓名（整格）');
+  }
+  // 标签后
+  const names = [...shortNames].join('|');
+  for (const match of source.matchAll(new RegExp(`(${names})(?![\\u4e00-\\u9fa5])`, 'gu'))) {
+    const before = source.slice(Math.max(0, match.index - 12), match.index);
+    if (NAME_LABEL.test(before)) push(match.index, match[1], '本批已识别的姓名（标签后）');
+  }
+  return added;
+}
+
 function mergeTypedTerms(analysisOptions, batchTerms) {
   const typedTerms = { ...(analysisOptions.typedTerms || {}) };
   for (const [type, values] of batchTerms) typedTerms[type] = [...new Set([...(typedTerms[type] || []), ...values])];
   return { ...analysisOptions, typedTerms };
 }
 
-module.exports = { prepareReversibleBatch, batchAiPrompt, screeningAiPrompt };
+module.exports = { prepareReversibleBatch, batchAiPrompt, screeningAiPrompt, shortNameFindings };

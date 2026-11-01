@@ -3103,7 +3103,7 @@ async function restoreFolder(opened) {
     }
     if (opened.skipped?.length) {
       const skipped = document.createElement('h3');
-      skipped.textContent = `未处理（不需要还原的文件类型）：${opened.skipped.join('、')}`;
+      skipped.textContent = `未处理（不需要还原的文件类型，或超出层级/数量上限）：${opened.skipped.join('、')}`;
       elements.restoreChecklist.append(skipped);
     }
     elements.restoreChecklist.classList.remove('hidden');

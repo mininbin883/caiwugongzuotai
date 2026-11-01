@@ -944,6 +944,10 @@ async function reopenOfficeSession(inputPath) {
 }
 
 function batchExportHandlers(exportSession, batch = null) {
+  // 批次可逆模式：本批认出的所有对象都参与每个文件的整包替换与残留检查（某个文件里没认出、别的文件认出了的，也不会漏）。
+  const sweepFindings = Array.isArray(batch?.mapping)
+    ? batch.mapping.map((entry) => ({ value: entry.value, replacement: entry.token, enabled: true }))
+    : [];
   return {
     analyzeText: async (text, job) => batch?.prepared?.get(job?.id) || (await loadRedactionEngine()).analyzeText(text, batch?.analysisOptions || {}),
     outputPrefix: batch?.fileNumber ? (index) => `${batch.fileNumber}-${String(index + 1).padStart(2, '0')}` : undefined,
@@ -953,7 +957,7 @@ function batchExportHandlers(exportSession, batch = null) {
       // 批次超过同时保留的文档数时，较早的会话会被释放：从原文件重新读取（提取结果与导入时一致）。
       if (!officeSession && job?.input) officeSession = await reopenOfficeSession(job.input);
       if (!officeSession || officeSession.kind !== descriptor?.kind) throw new Error('LOCAL_OFFICE_SESSION_EXPIRED');
-      return renderRedactedOffice(officeSession, findings, outputPath);
+      return renderRedactedOffice(officeSession, findings, outputPath, { sweepFindings });
     },
     renderPdf: async (descriptor, findings, outputPath) => {
       const imageSession = imageSessions.get(String(descriptor?.token || ''));

@@ -277,6 +277,23 @@ export function createPseudonymTokenizer({ reservedText = '', tokenizer }) {
 }
 
 /** 假名换回：按长度从长到短一次替换；数字、字母开头结尾的假名要求两侧不紧挨字母数字。 */
+// 在文字里找假名。以字母数字开头/结尾的假名，两侧不能紧挨着字母数字（避免撞进更长的号码），
+// 但两个假名紧挨在一起时（如“…地址Q013”后紧跟手机号假名）彼此算作边界，两个都要换回。
+function findPseudonymMatches(text, tokens) {
+  if (!tokens.length || !text) return [];
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp([...tokens].sort((left, right) => right.length - left.length).map(escape).join('|'), 'gu');
+  const raw = [...text.matchAll(pattern)].map((match) => ({ start: match.index, end: match.index + match[0].length, token: match[0] }));
+  const alnum = (char) => /[0-9A-Za-z]/u.test(char || '');
+  return raw.filter((match, index) => {
+    const leftOk = !alnum(match.token[0]) || !alnum(text[match.start - 1]) || raw[index - 1]?.end === match.start;
+    const rightOk = !alnum(match.token.at(-1)) || !alnum(text[match.end]) || raw[index + 1]?.start === match.end;
+    return leftOk && rightOk;
+  });
+}
+
+export { findPseudonymMatches };
+
 export function restorePseudonyms(input, mapping) {
   const text = String(input || '');
   const entries = (Array.isArray(mapping) ? mapping : []).filter((entry) => entry?.form === 'pseudonym' && entry.token && entry.value);
@@ -287,20 +304,16 @@ export function restorePseudonyms(input, mapping) {
     const code = entry.type === 'company' ? entry.token.match(/Q\d{3,}/u)?.[0] : null;
     if (code && !byToken.has(code)) byToken.set(code, entry.value);
   }
-  const pattern = new RegExp([...byToken.keys()]
-    .sort((left, right) => right.length - left.length)
-    .map((token) => {
-      const body = escapeRegExp(token);
-      const before = /^[0-9A-Za-z]/u.test(token) ? '(?<![0-9A-Za-z])' : '';
-      const after = /[0-9A-Za-z]$/u.test(token) ? '(?![0-9A-Za-z])' : '';
-      return `${before}${body}${after}`;
-    }).join('|'), 'gu');
   const counts = new Map();
   let count = 0;
-  const restored = text.replace(pattern, (match) => {
+  let restored = '';
+  let cursor = 0;
+  for (const match of findPseudonymMatches(text, [...byToken.keys()])) {
+    restored += text.slice(cursor, match.start) + byToken.get(match.token);
+    cursor = match.end;
     count += 1;
-    counts.set(match, (counts.get(match) || 0) + 1);
-    return byToken.get(match);
-  });
+    counts.set(match.token, (counts.get(match.token) || 0) + 1);
+  }
+  restored += text.slice(cursor);
   return { text: restored, count, counts };
 }

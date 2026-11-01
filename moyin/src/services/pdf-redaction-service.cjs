@@ -640,12 +640,31 @@ async function createPdfResigningRequest(filePath, details = {}) {
   };
 }
 
+// 文档属性（标题、作者等）、XMP 元数据、书签和批注文字常含公司名、人名：导出副本前清空。
+function scrubPdfMetadata(document) {
+  for (const setter of ['setTitle', 'setAuthor', 'setSubject', 'setCreator', 'setProducer']) document[setter]('');
+  document.setKeywords([]);
+  const catalog = document.catalog;
+  for (const key of ['Metadata', 'Outlines', 'PieceInfo']) catalog.delete(PDFName.of(key));
+  if (catalog.get(PDFName.of('PageMode'))?.toString() === '/UseOutlines') catalog.delete(PDFName.of('PageMode'));
+  for (const page of document.getPages()) {
+    page.node.delete(PDFName.of('Metadata'));
+    const annots = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
+    for (let index = 0; index < (annots?.size() || 0); index += 1) {
+      const annot = annots.lookupMaybe(index, PDFDict);
+      if (!annot || annot.get(PDFName.of('Subtype'))?.toString() === '/Widget') continue;
+      for (const key of ['Contents', 'T', 'RC', 'Subj']) annot.delete(PDFName.of(key));
+    }
+  }
+}
+
 async function renderStructurePreservingPdf(session, pageBuffers, outputPath, decoratePage = null) {
   const sourcePath = session?.sourcePath || session?.workspace?.inputPath;
   if (!sourcePath || !path.isAbsolute(sourcePath)) return null;
   const sourceBytes = await fs.readFile(sourcePath);
   if (inspectPdfBytes(sourceBytes).encrypted) return null;
   const document = await PDFDocument.load(sourceBytes, { updateMetadata: false });
+  scrubPdfMetadata(document);
   const before = inspectPdfDocument(document);
   const beforeCompatibility = inspectPdfBytes(sourceBytes);
   if (document.getPageCount() !== session.pages.length || before.rotations.some((angle) => normalizeRightAngle(angle) === null)) return null;

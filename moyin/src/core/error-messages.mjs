@@ -21,6 +21,7 @@ const MESSAGES = [
   [/LOCAL_(?:OFFICE|IMAGE)_SESSION_KIND_MISMATCH/, '导出格式和导入的文档不一致。请重新导入后再导出。'],
   [/LOCAL_CSV_STRUCTURE_CHANGED/, '原文被编辑后，表格的行列结构变了，无法按原格式导出。请撤销编辑或重新导入；漏项请用“选中文字补选”。'],
   [/LOCAL_(?:OFFICE|IMAGE)_NO_REDACTIONS/, '没有可以写回的隐藏项：要么一项都没勾选，要么识别到的内容都不在能改写的位置（例如只出现在图表、文本框里）。请打开这个文件核对一下。'],
+  [/LOCAL_EXPORT_RESIDUAL_FOUND/, '导出前的整包检查发现副本里仍有原文（通常在批注、页眉页脚、图表等难以改写的位置），为防止泄露已停止导出。请打开这个文件检查这些位置，删除或改写后再导出。'],
   [/LOCAL_EXPORT_TOO_LARGE/, '导出内容太大，请拆分文档后再导出。'],
   [/LOCAL_EXPORT_INVALID/, '导出内容不完整，请重新识别后再导出。'],
   [/LOCAL_DISK_BUDGET_EXCEEDED|LOCAL_WORKSPACE_BUDGET_EXCEEDED/, '电脑磁盘空间不足。请清理一些空间后重试。'],

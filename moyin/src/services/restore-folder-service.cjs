@@ -8,12 +8,20 @@ const path = require('node:path');
 
 const FOLDER_RESTORE_EXTENSIONS = ['docx', 'xlsx', 'csv', 'md', 'txt'];
 
+const MAX_DEPTH = 3;
+const MAX_FILES = 500;
+
+// 超过层级或数量上限的不处理，但记进 skipped 并标出原因，界面上能看到，不会悄悄漏掉。
 async function walk(root, relative, depth, out) {
-  if (depth > 3 || out.files.length > 500) return;
   const entries = await fs.readdir(path.join(root, relative), { withFileTypes: true });
   for (const entry of entries) {
     const rel = path.join(relative, entry.name);
-    if (entry.isDirectory()) { await walk(root, rel, depth + 1, out); continue; }
+    if (entry.isDirectory()) {
+      if (depth >= MAX_DEPTH) { out.skipped.push(`${rel}${path.sep}（文件夹层级太深，未处理）`); continue; }
+      await walk(root, rel, depth + 1, out);
+      continue;
+    }
+    if (out.files.length >= MAX_FILES) { out.truncated = true; out.skipped.push(`${rel}（超过 ${MAX_FILES} 个文件，未处理）`); continue; }
     if (!entry.isFile()) continue;
     const kind = path.extname(entry.name).toLowerCase().slice(1);
     if (FOLDER_RESTORE_EXTENSIONS.includes(kind) && !entry.name.startsWith('~$')) out.files.push({ rel, kind });
@@ -23,7 +31,7 @@ async function walk(root, relative, depth, out) {
 
 async function listRestorableFiles(folderPath) {
   if (typeof folderPath !== 'string' || !path.isAbsolute(folderPath)) throw new Error('LOCAL_PATH_INVALID');
-  const out = { files: [], skipped: [] };
+  const out = { files: [], skipped: [], truncated: false };
   await walk(folderPath, '', 0, out);
   // 编号来自路径（如 …/MI-000200-税务筛查资料/筛查结果）或文件名。
   const fileNumber = folderPath.match(/MI-\d{6}/u)?.[0] || out.files.map((item) => item.rel.match(/MI-\d{6}/u)?.[0]).find(Boolean) || '';

@@ -1,5 +1,5 @@
 import { collectSecrets, collectSpacedNames, collectRepeatedValues } from './secret-name-rules.mjs';
-import { collectTableColumns, NAME_STOPWORDS } from './table-columns.mjs';
+import { collectTableColumns, NAME_STOPWORDS, COMMON_SURNAMES, COMPOUND_SURNAMES } from './table-columns.mjs';
 
 export const TYPE_LABELS = Object.freeze({
   company: '公司名称',
@@ -134,7 +134,7 @@ function collectGroupRegex(text, type, regex, group = 1, validator = () => true)
   const results = [];
   for (const match of text.matchAll(regex)) {
     const value = match[group];
-    if (!value || !validator(value)) continue;
+    if (!value || !validator(value, match)) continue;
     const relativeStart = match[0].lastIndexOf(value);
     const start = match.index + relativeStart;
     results.push({ type, value, start, end: start + value.length });
@@ -269,7 +269,10 @@ export function analyzeText(input, options = {}) {
     findings.push(...collectRegex(text, 'company', /(?<![\p{Script=Han}A-Z0-9])(?:[\p{Script=Han}A-Z0-9（）()·&]{2,48})(?:有限责任公司|股份有限公司|有限公司|集团公司|集团|事务所|研究院|中心|公司)(?![\p{Script=Han}])/gu));
   }
   if (enabledTypes.has('person')) {
-    const personOk = (value) => !NAME_STOPWORDS.has(value.replace(/·/gu, ''));
+    // 标签和名字之间没有冒号或空格时（如“项目经理部项目”），要求以常见姓氏开头，避免把“部项目”当成人名。
+    const surnameOk = (value) => COMMON_SURNAMES.has(value[0]) || COMPOUND_SURNAMES.some((surname) => value.startsWith(surname));
+    const personOk = (value, match) => !NAME_STOPWORDS.has(value.replace(/·/gu, '')) &&
+      (!match || /[：: ]$/u.test(match[0].slice(0, match[0].lastIndexOf(value))) || surnameOk(value));
     findings.push(...collectGroupRegex(text, 'person', /(?:法定代表人|项目负责人|联系人|负责人|经办人|收件人|项目经理|审核人|申请人|法人|开票人|收款人|复核人|审批人|报销人|领款人|交款人|付款人|签收人|收货人|发货人|验收人|制单人|制表人|记账人|出纳|会计|业务员|司机|驾驶员|乘车人|旅客姓名|承办人|委托代理人|代理人|担保人|借款人|见证人|对接人|责任人)[：: ]*([\p{Script=Han}·]{2,4})(?![\p{Script=Han}·])/gu, 1, personOk));
     findings.push(...collectGroupRegex(text, 'person', /(?:姓名|客户)[：:][ \t]*([\p{Script=Han}·]{2,4})(?![\p{Script=Han}·])/gu, 1, personOk));
     findings.push(...collectGroupRegex(text, 'person', /(?<![\p{Script=Han}·])([\p{Script=Han}·]{2,4})(?:先生|女士|律师|教授|博士)(?![\p{Script=Han}·])/gu, 1, personOk));
@@ -284,7 +287,7 @@ export function analyzeText(input, options = {}) {
   if (enabledTypes.has('uscc')) findings.push(...collectRegex(text, 'uscc', /(?<![0-9A-Z])[0-9ABCDEFGHJKLMNPQRTUWXY]{18}(?![0-9A-Z])/giu, usccValid));
   if (enabledTypes.has('mobile')) findings.push(...collectRegex(text, 'mobile', /(?<![\d.])(?:\+?86[- ]?)?1[3-9]\d{9}(?!\.?\d)/gu));
   if (enabledTypes.has('bankcard')) findings.push(...collectRegex(text, 'bankcard', /(?<![\d.])(?:\d[ -]?){15,18}\d(?!\.?\d)/gu, (value, index) => bankcardPlausible(text, value, index)));
-  if (enabledTypes.has('ipv4')) findings.push(...collectRegex(text, 'ipv4', /(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)/gu, ipv4Valid));
+  if (enabledTypes.has('ipv4')) findings.push(...collectRegex(text, 'ipv4', /(?<![\dA-Za-z.])(?:\d{1,3}\.){3}\d{1,3}(?![\dA-Za-z]|\.\d)/gu, ipv4Valid));
   if (enabledTypes.has('landline')) findings.push(...collectRegex(text, 'landline', /(?<![\d.])(?:0[1-9]\d{1,2}[- ]?)?[2-9]\d{6,7}(?!\.?\d)/gu, (value, index) => landlinePlausible(text, value, index)));
   if (enabledTypes.has('address')) {
     findings.push(...collectGroupRegex(text, 'address', /(?:注册地址|办公地址|联系地址|通讯地址|收货地址|家庭住址|地址|住址)[：:][ \t]*([^\s，,；;。\n]{6,80})/gu));

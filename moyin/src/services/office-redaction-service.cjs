@@ -5,6 +5,7 @@ const path = require('node:path');
 const JSZip = require('jszip');
 const XLSX = require('xlsx');
 const { inspectOfficeLongTail } = require('./office-long-tail-service.cjs');
+const { sweepPairsFromFindings, sweepPackage, residualScan, cleanSharedStrings, scrubAuthors } = require('./office-package-sweep.cjs');
 
 const OFFICE_EXTENSIONS = Object.freeze(['.docx', '.xlsx']);
 const MAX_OFFICE_BYTES = 100 * 1024 * 1024;
@@ -48,12 +49,13 @@ function wordPartLabel(partName) {
 function parseWordPart(xml) {
   const nodes = [];
   let text = '';
-  const tokenPattern = /<w:t\b[^>]*>[\s\S]*?<\/w:t>|<w:tab\b[^>]*\/?\s*>|<w:br\b[^>]*\/?\s*>|<\/w:p>/gi;
+  // 修订里被删除的文字（w:delText）仍保存在文件中，同样要识别。
+  const tokenPattern = /<w:(t|delText)\b[^>]*>[\s\S]*?<\/w:\1>|<w:tab\b[^>]*\/?\s*>|<w:br\b[^>]*\/?\s*>|<\/w:p>/gi;
   for (const match of xml.matchAll(tokenPattern)) {
     const token = match[0];
-    if (/^<w:t\b/i.test(token)) {
+    if (/^<w:(?:t|delText)\b/i.test(token)) {
       const openEnd = token.indexOf('>') + 1;
-      const closeStart = token.toLowerCase().lastIndexOf('</w:t>');
+      const closeStart = token.lastIndexOf('</w:');
       const value = decodeXml(token.slice(openEnd, closeStart));
       const start = text.length;
       text += value;
@@ -100,7 +102,22 @@ function normalizeReversibleMapping(mapping) {
   });
 }
 
-// 假名的查找正则：从长到短；数字字母开头结尾的要求两侧不紧挨字母数字；单位的 Q 编号单独出现时也换回全称。
+// 在文字里找假名。以字母数字开头/结尾的假名，两侧不能紧挨着字母数字（避免撞进更长的号码），
+// 但两个假名紧挨在一起时（如“…地址Q013”后紧跟手机号假名）彼此算作边界，两个都要换回。
+function findPseudonymMatches(text, tokens) {
+  if (!tokens.length || !text) return [];
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp([...tokens].sort((left, right) => right.length - left.length).map(escape).join('|'), 'gu');
+  const raw = [...text.matchAll(pattern)].map((match) => ({ start: match.index, end: match.index + match[0].length, token: match[0] }));
+  const alnum = (char) => /[0-9A-Za-z]/u.test(char || '');
+  return raw.filter((match, index) => {
+    const leftOk = !alnum(match.token[0]) || !alnum(text[match.start - 1]) || raw[index - 1]?.end === match.start;
+    const rightOk = !alnum(match.token.at(-1)) || !alnum(text[match.end]) || raw[index + 1]?.start === match.end;
+    return leftOk && rightOk;
+  });
+}
+
+// 假名表：单位的 Q 编号单独出现时也换回全称。
 function pseudonymPattern(entries) {
   const byToken = new Map();
   for (const entry of entries) if (entry.form === 'pseudonym') byToken.set(entry.token, entry);
@@ -110,13 +127,7 @@ function pseudonymPattern(entries) {
     if (code && !byToken.has(code)) byToken.set(code, entry);
   }
   if (!byToken.size) return null;
-  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const source = [...byToken.keys()].sort((left, right) => right.length - left.length).map((token) => {
-    const before = /^[0-9A-Za-z]/u.test(token) ? '(?<![0-9A-Za-z])' : '';
-    const after = /[0-9A-Za-z]$/u.test(token) ? '(?![0-9A-Za-z])' : '';
-    return `${before}${escape(token)}${after}`;
-  }).join('|');
-  return { regex: new RegExp(source, 'gu'), byToken };
+  return { tokens: [...byToken.keys()], byToken };
 }
 
 function officeTokenFindings(text, mapping) {
@@ -155,7 +166,15 @@ function officeTokenFindings(text, mapping) {
   // 批次副本的文件名（MI-000200-01-名称-脱敏副本.xlsx）换回原文件名；名称中的代号、假名一并换回。
   const restoreInline = (value) => {
     let output = value.replace(REVERSIBLE_TOKEN_SCAN, (token) => byToken.get(token)?.value ?? token);
-    if (pseudo) output = output.replace(pseudo.regex, (match) => pseudo.byToken.get(match)?.value ?? match);
+    if (pseudo) {
+      let rebuilt = '';
+      let cursor = 0;
+      for (const match of findPseudonymMatches(output, pseudo.tokens)) {
+        rebuilt += output.slice(cursor, match.start) + pseudo.byToken.get(match.token).value;
+        cursor = match.end;
+      }
+      output = rebuilt + output.slice(cursor);
+    }
     return output;
   };
   const copyNames = [];
@@ -163,19 +182,22 @@ function officeTokenFindings(text, mapping) {
     copyNames.push({ type: 'custom', label: '文件名', value: match[0], start: match.index, end: match.index + match[0].length, replacement: restoreInline(match[1]), enabled: true });
   }
   if (copyNames.length) {
-    const inside = (item) => copyNames.some((name) => item.start < name.end && name.start < item.end);
+    const nameMask = new Uint8Array(source.length + 1);
+    for (const name of copyNames) nameMask.fill(1, name.start, name.end);
+    const inside = (item) => nameMask.subarray(item.start, item.end).includes(1);
     for (let index = findings.length - 1; index >= 0; index -= 1) if (inside(findings[index])) findings.splice(index, 1);
     findings.push(...copyNames);
   }
   if (pseudo) {
-    const covered = findings.map((item) => [item.start, item.end]);
-    for (const match of source.matchAll(pseudo.regex)) {
-      const start = match.index;
-      const end = start + match[0].length;
-      if (covered.some(([from, to]) => start < to && from < end)) continue;
-      const entry = pseudo.byToken.get(match[0]);
+    // 覆盖掩码：线性判断重叠（大表有上万处时，逐一比较会非常慢）。
+    const covered = new Uint8Array(source.length + 1);
+    for (const item of findings) covered.fill(1, item.start, item.end);
+    for (const match of findPseudonymMatches(source, pseudo.tokens)) {
+      const { start, end } = match;
+      if (covered.subarray(start, end).includes(1)) continue;
+      const entry = pseudo.byToken.get(match.token);
       actualCounts.set(entry.token, (actualCounts.get(entry.token) || 0) + 1);
-      findings.push({ type: entry.type, label: entry.label, value: match[0], start, end, replacement: entry.value, enabled: true });
+      findings.push({ type: entry.type, label: entry.label, value: match.token, start, end, replacement: entry.value, enabled: true });
     }
     findings.sort((left, right) => left.start - right.start);
   }
@@ -279,7 +301,9 @@ function workbookSheetParts(zip) {
 }
 
 function cellDisplayValue(cell) {
-  if (!cell || cell.f) return null;
+  if (!cell) return null;
+  // 公式单元格：文字结果（上次计算保存的值）也要识别，例如 =A2 引用了一个人名；数字结果不处理。
+  if (cell.f) return cell.t === 's' && typeof cell.v === 'string' && cell.v ? cell.v : null;
   if (cell.v === undefined || cell.v === null) return null;
   if (cell.t === 'd' && cell.v instanceof Date) return cell.v.toISOString();
   // 部分财务软件导出的货币格式里，货币符号被写成了乱码（如“å52,500.00”）。数字格只保留正常的数字显示。
@@ -368,7 +392,28 @@ async function extractOfficeDocument(filePath) {
     : extractXlsx(zip, stat.size, filePath, bytes, longTailReport);
 }
 
-async function renderDocx(session, findings) {
+// 文件包收尾：导出副本时整包替换、清空作者与属性并做残留检查；逆脱敏时整包换回、保留文档属性。
+async function finishPackage(zip, findings, options = {}) {
+  const pairs = sweepPairsFromFindings([...(findings || []), ...(options.sweepFindings || [])]);
+  if (options.restore) {
+    // 超链接目标里的代号是按 URI 编码写入的，一并换回。
+    for (const pair of [...pairs]) if (pair.from.startsWith('[MI_')) pairs.push({ ...pair, from: encodeURIComponent(pair.from) });
+    pairs.sort((left, right) => right.from.length - left.from.length);
+  }
+  const swept = await sweepPackage(zip, pairs, { bounded: Boolean(options.restore) });
+  if (options.restore) return { swept, residual: [] };
+  await scrubAuthors(zip);
+  await scrubDocumentProperties(zip);
+  const residual = await residualScan(zip, pairs);
+  if (residual.length) {
+    const error = new Error(`LOCAL_EXPORT_RESIDUAL_FOUND:${residual.map((item) => item.part).slice(0, 3).join(',')}`);
+    error.residual = residual;
+    throw error;
+  }
+  return { swept, residual };
+}
+
+async function renderDocx(session, findings, options = {}) {
   if (typeof session?.sourcePath !== 'string' || !path.isAbsolute(session.sourcePath)) throw new Error('LOCAL_OFFICE_SESSION_INVALID');
   const zip = await JSZip.loadAsync(await fs.readFile(session.sourcePath), { checkCRC32: true });
   const enabled = activeFindings(findings);
@@ -391,9 +436,9 @@ async function renderDocx(session, findings) {
     if (replacements.length) zip.file(part.name, xml);
   }
   if (!applied.size) throw new Error('LOCAL_OFFICE_NO_REDACTIONS');
-  await scrubDocumentProperties(zip);
+  const finished = await finishPackage(zip, findings, options);
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } });
-  return { buffer, redactions: applied.size, changedUnits: changedNodes };
+  return { buffer, redactions: applied.size, changedUnits: changedNodes, sweptUnits: finished.swept };
 }
 
 function patchWorksheetXml(xml, replacements) {
@@ -406,6 +451,9 @@ function patchWorksheetXml(xml, replacements) {
     let updatedAttributes = attributes.replace(/\s+t=(['"])[\s\S]*?\1/i, '');
     updatedAttributes = updatedAttributes.trimEnd();
     changed += 1;
+    // 公式单元格：保留公式，只改保存的计算结果。
+    const formula = (full.match(new RegExp(`<${prefix}f\\b[^>]*?(?:\\/>|>[\\s\\S]*?<\\/${prefix}f>)`, 'i')) || [])[0];
+    if (formula) return `<${prefix}c${updatedAttributes} t="str">${formula}<${prefix}v>${encodeXml(replacements.get(address))}</${prefix}v></${prefix}c>`;
     return `<${prefix}c${updatedAttributes} t="inlineStr"><${prefix}is><${prefix}t xml:space="preserve">${encodeXml(replacements.get(address))}</${prefix}t></${prefix}is></${prefix}c>`;
   });
   return { xml: output, changed };
@@ -512,7 +560,7 @@ async function scrubDocumentProperties(zip) {
   }
 }
 
-async function renderXlsx(session, findings) {
+async function renderXlsx(session, findings, options = {}) {
   if (typeof session?.sourcePath !== 'string' || !path.isAbsolute(session.sourcePath)) throw new Error('LOCAL_OFFICE_SESSION_INVALID');
   const zip = await JSZip.loadAsync(await fs.readFile(session.sourcePath), { checkCRC32: true });
   const enabled = activeFindings(findings);
@@ -538,20 +586,24 @@ async function renderXlsx(session, findings) {
     zip.file(partName, patched.xml);
   }
   await applySheetRenames(zip, sheetPlan.renames);
-  await scrubDocumentProperties(zip);
+  // 共享字符串表里不再被引用的旧文字（改写前的原文）清空。
+  const clearedStrings = await cleanSharedStrings(zip);
+  const finished = await finishPackage(zip, findings, options);
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } });
-  return { buffer, redactions: applied.size, changedUnits: changedCells, renamedSheets: sheetPlan.renames.size };
+  return { buffer, redactions: applied.size, changedUnits: changedCells, renamedSheets: sheetPlan.renames.size, clearedStrings, sweptUnits: finished.swept };
 }
 
-async function renderRedactedOffice(session, findings, outputPath) {
+async function renderRedactedOffice(session, findings, outputPath, options = {}) {
   if (!session || !OFFICE_EXTENSIONS.includes(`.${session.kind}`)) throw new Error('LOCAL_OFFICE_SESSION_INVALID');
-  const rendered = session.kind === 'docx' ? await renderDocx(session, findings) : await renderXlsx(session, findings);
+  const rendered = session.kind === 'docx' ? await renderDocx(session, findings, options) : await renderXlsx(session, findings, options);
   await fs.writeFile(outputPath, rendered.buffer);
   return {
     bytes: rendered.buffer.length,
     redactions: rendered.redactions,
     changedUnits: rendered.changedUnits,
     renamedSheets: rendered.renamedSheets || 0,
+    clearedStrings: rendered.clearedStrings || 0,
+    sweptUnits: rendered.sweptUnits || 0,
     longTailReport: session.longTailReport || null
   };
 }
@@ -561,7 +613,7 @@ async function restoreReversibleOffice(inputPath, mapping, outputPath) {
   const document = await extractOfficeDocument(inputPath);
   const report = officeTokenFindings(document.text, mapping);
   if (!report.findings.length) throw new Error('LOCAL_OFFICE_REVERSIBLE_TOKENS_NOT_FOUND');
-  const rendered = await renderRedactedOffice(document.session, report.findings, outputPath);
+  const rendered = await renderRedactedOffice(document.session, report.findings, outputPath, { restore: true });
   return {
     sourceName: document.name,
     kind: document.session.kind,
