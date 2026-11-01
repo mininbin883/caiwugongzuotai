@@ -4,6 +4,7 @@ const { app, BrowserWindow, dialog, ipcMain, Menu, session } = require('electron
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
+const os = require('node:os');
 const { extractDocument, SUPPORTED_EXTENSIONS } = require('./services/document-extractor.cjs');
 const {
   IMAGE_EXTENSIONS,
@@ -933,13 +934,26 @@ function loadReversibleEngine() {
   return reversibleEnginePromise;
 }
 
+async function reopenOfficeSession(inputPath) {
+  const extension = path.extname(inputPath).toLowerCase();
+  if (extension === '.xls') {
+    const converted = path.join(os.tmpdir(), `moyin-reopen-${randomUUID()}.xlsx`);
+    await convertXlsToXlsx(inputPath, converted);
+    return (await extractOfficeDocument(converted)).session;
+  }
+  if (!OFFICE_EXTENSIONS.includes(extension)) return null;
+  return (await extractOfficeDocument(inputPath)).session;
+}
+
 function batchExportHandlers(exportSession, batch = null) {
   return {
     analyzeText: async (text, job) => batch?.prepared?.get(job?.id) || (await loadRedactionEngine()).analyzeText(text, batch?.analysisOptions || {}),
     outputPrefix: batch?.fileNumber ? (index) => `${batch.fileNumber}-${String(index + 1).padStart(2, '0')}` : undefined,
     applyFindings: (text, findings) => redactionEnginePromise.then((engine) => engine.applyFindings(text, findings)),
-    renderOffice: async (descriptor, findings, outputPath) => {
-      const officeSession = officeSessions.get(String(descriptor?.token || ''));
+    renderOffice: async (descriptor, findings, outputPath, job) => {
+      let officeSession = officeSessions.get(String(descriptor?.token || ''));
+      // 批次超过同时保留的文档数时，较早的会话会被释放：从原文件重新读取（提取结果与导入时一致）。
+      if (!officeSession && job?.input) officeSession = await reopenOfficeSession(job.input);
       if (!officeSession || officeSession.kind !== descriptor?.kind) throw new Error('LOCAL_OFFICE_SESSION_EXPIRED');
       return renderRedactedOffice(officeSession, findings, outputPath);
     },
@@ -954,8 +968,9 @@ function batchExportHandlers(exportSession, batch = null) {
       if (!imageSession || imageSession.kind !== 'image') throw new Error('LOCAL_IMAGE_SESSION_EXPIRED');
       return renderRedactedImage(imageSession.pages[0], findings, outputPath);
     },
-    renderCsv: async (descriptor, text, outputPath) => {
-      const csvSession = csvSessions.get(String(descriptor?.token || ''));
+    renderCsv: async (descriptor, text, outputPath, job) => {
+      let csvSession = csvSessions.get(String(descriptor?.token || ''));
+      if (!csvSession && job?.input) csvSession = (await extractCsvDocument(job.input)).session;
       if (!csvSession) throw new Error('LOCAL_CSV_SESSION_EXPIRED');
       return renderRedactedCsv(csvSession, text, outputPath);
     },

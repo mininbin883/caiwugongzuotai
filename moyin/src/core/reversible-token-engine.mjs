@@ -111,6 +111,13 @@ export function restoreTokens(input, mapping, options = {}) {
   // 批次副本的文件名（MI-000200-01-名称-脱敏副本.xlsx）换回原文件名；名称里的代号、假名随后一并换回。
   let restoredText = source.replace(COPY_NAME_PATTERN, (_match, stem) => stem);
   restoredText = restoredText.replace(TOKEN_SCAN_PATTERN, (token) => (known.has(token) ? known.get(token) : token));
+  // 工作表名称等处的裸写代号（没有方括号）：只换回已知的代号。
+  restoredText = restoredText.replace(/(?<![[A-Za-z0-9_])MI_[A-F0-9]{8}_[0-9A-Z]{3,6}(?![\]A-Za-z0-9_])/gu, (bare) => {
+    const token = `[${bare}]`;
+    if (!known.has(token)) return bare;
+    restoredCount += 1;
+    return known.get(token);
+  });
   if (pseudonymEntries.length) {
     const pseudo = restorePseudonyms(restoredText, pseudonymEntries);
     restoredText = pseudo.text;

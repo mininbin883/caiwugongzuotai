@@ -23,6 +23,8 @@ const state = {
   unexported: false,
   lastExport: null,
   restoreFile: null,
+  batchFailures: new Map(),
+  batchLastResult: null,
   vaultSelected: new Map(),
   vaultDetailId: null,
   vaultLastClicked: -1,
@@ -80,7 +82,7 @@ const elements = Object.fromEntries([
   'vaultConfirmLabel', 'vaultPasswordConfirm', 'vaultDialogError', 'vaultDialogCancel', 'exportOfficeButton', 'exportCsvButton',
   'pdfPasswordDialog', 'pdfPasswordForm', 'pdfPasswordDescription', 'pdfPassword', 'pdfPasswordError', 'pdfPasswordCancel',
   'workflowGuide', 'workflowStepImport', 'workflowStepReview', 'workflowStepExport', 'workflowSummary',
-  'batchMode', 'batchModeHint', 'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
+  'batchMode', 'batchModeHint', 'batchExportResult', 'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
   'restorePanel', 'restoreInput', 'restoreOutput', 'restoreMode', 'restoreButton', 'restoreExportButton', 'restoreOfficeButton', 'restoreReport',
   'restoreChecklist', 'restoreConfirm', 'restoreConfirmLabel', 'exportAuditBox',
   'vaultPanel', 'vaultPanelLocked', 'vaultPanelBody', 'vaultSelectPage', 'vaultDetail', 'vaultSelectionBar', 'vaultSelectionText',
@@ -1845,6 +1847,49 @@ const BATCH_STATUS = {
   canceled: ['已取消', 'canceled']
 };
 
+// 导出结果摘要：常驻在队列上方，列出失败的文件和原因（税务筛查模式下导出用的是假名文件名，这里换回原文件名）。
+function renderBatchExportResult() {
+  const box = elements.batchExportResult;
+  const result = state.batchLastResult;
+  box.replaceChildren();
+  box.classList.toggle('hidden', !result);
+  if (!result) return;
+  const failures = (result.errors || []).map((failure) => ({
+    name: state.batchJobs.get(failure.id)?.name || failure.sourceName || '（未知文件）',
+    reason: friendlyError(failure.error)
+  }));
+  box.classList.toggle('has-failures', failures.length > 0);
+  const title = document.createElement('strong');
+  title.textContent = `${result.batch ? `批次 ${result.batch.fileNumber}：` : ''}导出 ${result.exported} 个${failures.length ? `，失败 ${failures.length} 个` : '，全部成功'}${result.canceled ? '（已停止）' : ''}`;
+  box.append(title);
+  if (failures.length) {
+    const list = document.createElement('ul');
+    for (const failure of failures) {
+      const item = document.createElement('li');
+      const name = document.createElement('span');
+      name.textContent = `${failure.name}：`;
+      const reason = document.createElement('span');
+      reason.className = 'reason';
+      reason.textContent = failure.reason;
+      item.append(name, reason);
+      list.append(item);
+    }
+    box.append(list);
+    const note = document.createElement('span');
+    note.className = 'muted';
+    note.textContent = result.batch
+      ? '失败的文件没有进入这个批次（它们的副本没有生成）。处理好原因后，建议把整批重新导出一次，让所有文件共用同一套代号。失败明细也记录在记录文件夹的“墨隐-批处理清单.json”里。'
+      : '失败明细也记录在导出目录的“墨隐-批处理清单.json”里。';
+    box.append(note);
+  }
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'link-button';
+  close.textContent = '关闭这条提示';
+  close.addEventListener('click', () => { state.batchLastResult = null; renderBatchExportResult(); });
+  box.append(close);
+}
+
 function renderBatchJobs() {
   const jobs = [...state.batchJobs.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   elements.batchPanel.classList.toggle('hidden', jobs.length === 0);
@@ -1877,14 +1922,23 @@ function renderBatchJobs() {
     const name = document.createElement('strong');
     name.textContent = job.name;
     const meta = document.createElement('span');
+    let failureNode = null;
     const resultMeta = Number.isFinite(job.result?.characters) ? ` · ${job.result.characters.toLocaleString('zh-CN')} 字符` : '';
-    meta.textContent = `${BATCH_STATUS[job.status]?.[0] || job.status}${resultMeta}${job.error ? ` · ${job.error}` : ''}`;
+    meta.textContent = `${BATCH_STATUS[job.status]?.[0] || job.status}${resultMeta}${job.error ? ` · ${friendlyError(job.error)}` : ''}`;
+    if (state.batchFailures.has(job.id)) {
+      row.classList.add('export-failed');
+      const failure = document.createElement('span');
+      failure.className = 'batch-export-error';
+      failure.textContent = `导出失败：${friendlyError(state.batchFailures.get(job.id))}`;
+      failureNode = failure;
+    }
     const progress = document.createElement('div');
     progress.className = 'batch-progress';
     const progressValue = document.createElement('i');
     progressValue.style.width = `${job.progress || 0}%`;
     progress.append(progressValue);
     details.append(name, meta, progress);
+    if (failureNode) details.append(failureNode);
     const action = document.createElement('button');
     action.type = 'button';
     action.className = 'button button-small button-ghost';
@@ -2326,6 +2380,9 @@ window.veilforge.onBatchUpdate((job) => {
 
 window.veilforge.onBatchExportProgress((detail) => {
   state.batchExport = { ...(state.batchExport || {}), ...detail };
+  // 记下每个导出失败的文件和原因，在队列里标出来。
+  if (detail?.status === 'failed' && detail.id) state.batchFailures.set(detail.id, detail.error || '');
+  if (detail?.status === 'done' && detail.id) state.batchFailures.delete(detail.id);
   renderBatchJobs();
 });
 
@@ -2421,6 +2478,9 @@ elements.batchExportButton.addEventListener('click', async () => {
     return;
   }
   state.batchExport = { status: 'starting', total, exported: 0, failed: 0 };
+  state.batchFailures.clear();
+  state.batchLastResult = null;
+  renderBatchExportResult();
   renderBatchJobs();
   try {
     const result = await window.veilforge.exportCompletedBatch({
@@ -2436,6 +2496,9 @@ elements.batchExportButton.addEventListener('click', async () => {
       }
     });
     if (result.vaultState) await applyVaultStateAndFilters(result.vaultState);
+    for (const failure of result.errors || []) if (failure.id) state.batchFailures.set(failure.id, failure.error || '');
+    state.batchLastResult = result;
+    renderBatchExportResult();
     if (result.batch) {
       state.lastExport = {
         id: result.batch.id,

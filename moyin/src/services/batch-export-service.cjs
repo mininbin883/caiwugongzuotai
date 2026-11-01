@@ -68,16 +68,16 @@ async function renderJob(job, directory, handlers, reserved, index = 0) {
   try {
     if (result.csv) {
       if (typeof handlers.renderCsv !== 'function') throw new Error('LOCAL_BATCH_EXPORT_HANDLER_REQUIRED:renderCsv');
-      render = await handlers.renderCsv(result.csv, redactedText, outputPath);
+      render = await handlers.renderCsv(result.csv, redactedText, outputPath, job);
     } else if (!findings.length) {
       await fs.copyFile(job.input, outputPath, constants.COPYFILE_EXCL);
       render.bytes = (await fs.stat(outputPath)).size;
     } else if (result.office) {
-      render = await handlers.renderOffice(result.office, findings, outputPath);
+      render = await handlers.renderOffice(result.office, findings, outputPath, job);
     } else if (result.image?.kind === 'pdf') {
-      render = await handlers.renderPdf(result.image, findings, outputPath);
+      render = await handlers.renderPdf(result.image, findings, outputPath, job);
     } else if (result.image?.kind === 'image') {
-      render = await handlers.renderImage(result.image, findings, outputPath);
+      render = await handlers.renderImage(result.image, findings, outputPath, job);
     } else {
       await fs.writeFile(outputPath, redactedText, { encoding: 'utf8', flag: 'wx' });
       render = { bytes: Buffer.byteLength(redactedText, 'utf8'), characters: redactedText.length };
@@ -136,11 +136,11 @@ async function exportBatchResults(jobs, directory, handlers = {}) {
     try {
       const record = await renderJob(job, directory, handlers, reserved, index);
       records.push(record);
-      progress({ status: 'done', index, name: record.sourceName, outputName: path.basename(record.outputPath) });
+      progress({ status: 'done', index, id: job?.id, name: record.sourceName, outputName: path.basename(record.outputPath) });
     } catch (error) {
       const failure = { id: job?.id, sourceName: job?.result?.name || '', error: String(error?.message || error) };
       errors.push(failure);
-      progress({ status: 'failed', index, name: failure.sourceName, error: failure.error });
+      progress({ status: 'failed', index, id: failure.id, name: failure.sourceName, error: failure.error });
     }
   }
 

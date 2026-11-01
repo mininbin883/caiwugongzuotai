@@ -18,14 +18,16 @@ const MESSAGES = [
   [/LOCAL_(?:OFFICE|CSV|IMAGE|PDF)_SESSION_(?:EXPIRED|INVALID)|LOCAL_PDF_PASSWORD_SESSION_EXPIRED/, '当前文档的处理会话已失效（可能是原文被编辑过，或停留时间过长）。请重新导入文档。'],
   [/LOCAL_(?:OFFICE|IMAGE)_SESSION_KIND_MISMATCH/, '导出格式和导入的文档不一致。请重新导入后再导出。'],
   [/LOCAL_CSV_STRUCTURE_CHANGED/, '原文被编辑后，表格的行列结构变了，无法按原格式导出。请撤销编辑或重新导入；漏项请用“选中文字补选”。'],
-  [/LOCAL_(?:OFFICE|IMAGE)_NO_REDACTIONS/, '没有可以隐藏的内容：请至少勾选一项要隐藏的信息。'],
+  [/LOCAL_(?:OFFICE|IMAGE)_NO_REDACTIONS/, '没有可以写回的隐藏项：要么一项都没勾选，要么识别到的内容都不在能改写的位置（例如只出现在图表、文本框里）。请打开这个文件核对一下。'],
   [/LOCAL_EXPORT_TOO_LARGE/, '导出内容太大，请拆分文档后再导出。'],
   [/LOCAL_EXPORT_INVALID/, '导出内容不完整，请重新识别后再导出。'],
   [/LOCAL_DISK_BUDGET_EXCEEDED|LOCAL_WORKSPACE_BUDGET_EXCEEDED/, '电脑磁盘空间不足。请清理一些空间后重试。'],
   [/LOCAL_MEMORY_BUDGET_EXCEEDED/, '内存不足。请关闭其他程序，或把文件拆小后重试。'],
   // 可逆与逆脱敏
   [/LOCAL_(?:OFFICE|PDF)_REVERSIBLE_TOKENS_NOT_FOUND/, '在这个文件里没有找到本记录的代号。请确认导入的是 AI 返回的、对应编号的文件。'],
-  [/LOCAL_PDF_REVERSIBLE_SIDECAR_(?:REQUIRED|INVALID)|LOCAL_PDF_REVERSIBLE_COORDINATES_NOT_FOUND/, 'PDF 逆脱敏需要导出时一起生成的坐标副本（.tokens.json），请把它和 PDF 放在同一文件夹。'],
+  [/LOCAL_PDF_REVERSIBLE_SIDECAR_(?:REQUIRED|INVALID)/, 'PDF 逆脱敏需要导出时一起生成的坐标副本（.tokens.json），请把它和 PDF 放在同一文件夹。'],
+  [/LOCAL_PDF_REVERSIBLE_COORDINATES_NOT_FOUND/, '这份 PDF 里找不到能写入代号的文字位置（常见于扫描件识别不完整），无法生成可逆副本。可以打开这个文件补选或校正识别文字后单独导出，或改用“图片转 TXT”。'],
+  [/LOCAL_PDF_REVERSIBLE_FINDINGS_INVALID/, '这份 PDF 的隐藏项无法写成可逆代号（位置与识别文字对不上），请打开这个文件核对后单独导出。'],
   [/REVERSIBLE_MAPPING_INVALID|LOCAL_(?:OFFICE_REVERSIBLE|VAULT)_MAPPING_INVALID/, '代号对照表已损坏或不完整，无法逆脱敏。请从仓库备份恢复这条记录。'],
   // 仓库
   [/LOCAL_VAULT_PASSWORD_POLICY/, '仓库密码至少 10 个字符。'],

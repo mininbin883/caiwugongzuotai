@@ -4,7 +4,7 @@ import { friendlyError } from '../src/core/error-messages.mjs';
 import { buildAiPrompt } from '../src/core/ai-prompt.mjs';
 
 test('常见错误代码翻译成中文说明', () => {
-  assert.match(friendlyError(new Error('LOCAL_OFFICE_NO_REDACTIONS')), /至少勾选一项/);
+  assert.match(friendlyError(new Error('LOCAL_OFFICE_NO_REDACTIONS')), /没有可以写回的隐藏项/);
   assert.match(friendlyError(new Error("Error invoking remote method 'veilforge:export': Error: LOCAL_OFFICE_SESSION_EXPIRED")), /重新导入/);
   assert.match(friendlyError('LOCAL_VAULT_PASSWORD_OR_INTEGRITY_INVALID'), /密码不正确/);
   assert.match(friendlyError('LOCAL_DOCUMENT_TYPE_UNSUPPORTED'), /不支持这种文件格式/);

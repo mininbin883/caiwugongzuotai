@@ -144,6 +144,13 @@ function officeTokenFindings(text, mapping) {
       enabled: true
     });
   }
+  // 工作表名称里的代号没有方括号（工作表名不允许 [ ]）：已知代号的裸写形式也换回。
+  for (const match of source.matchAll(/(?<![\[A-Za-z0-9_])MI_[A-F0-9]{8}_[0-9A-Z]{3,6}(?![\]A-Za-z0-9_])/gu)) {
+    const entry = byToken.get(`[${match[0]}]`);
+    if (!entry) continue;
+    actualCounts.set(entry.token, (actualCounts.get(entry.token) || 0) + 1);
+    findings.push({ type: entry.type, label: entry.label, value: match[0], start: match.index, end: match.index + match[0].length, replacement: entry.value, enabled: true });
+  }
   const pseudo = pseudonymPattern(entries);
   // 批次副本的文件名（MI-000200-01-名称-脱敏副本.xlsx）换回原文件名；名称中的代号、假名一并换回。
   const restoreInline = (value) => {
@@ -288,11 +295,14 @@ async function extractXlsx(zip, sourceBytes, filePath, originalBytes, longTailRe
   const partBySheet = new Map(sheetParts.map((item) => [item.name, item.partName]));
   let text = '';
   const cells = [];
+  const sheets = [];
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     const partName = partBySheet.get(sheetName);
     if (!sheet || !partName) continue;
     if (text) text += '\n\f\n';
+    // 记下工作表名称在文字中的位置：名称里的敏感信息导出时要改写工作表名。
+    sheets.push({ sheetName, partName, start: text.length + '【工作表：'.length, end: text.length + '【工作表：'.length + sheetName.length });
     text += `【工作表：${sheetName}】\n`;
     if (!sheet['!ref']) continue;
     const range = XLSX.utils.decode_range(sheet['!ref']);
@@ -317,7 +327,7 @@ async function extractXlsx(zip, sourceBytes, filePath, originalBytes, longTailRe
     sourceBytes,
     characters: text.length,
     text,
-    session: { kind: 'xlsx', sourceName: path.basename(filePath), sourcePath: path.resolve(filePath), cells, longTailReport },
+    session: { kind: 'xlsx', sourceName: path.basename(filePath), sourcePath: path.resolve(filePath), cells, sheets, longTailReport },
     longTailReport
   };
 }
@@ -381,6 +391,7 @@ async function renderDocx(session, findings) {
     if (replacements.length) zip.file(part.name, xml);
   }
   if (!applied.size) throw new Error('LOCAL_OFFICE_NO_REDACTIONS');
+  await scrubDocumentProperties(zip);
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } });
   return { buffer, redactions: applied.size, changedUnits: changedNodes };
 }
@@ -398,6 +409,107 @@ function patchWorksheetXml(xml, replacements) {
   return { xml: output, changed };
 }
 
+// ---------- 工作表名称与文档属性 ----------
+const SHEET_NAME_INVALID = /[\[\]:*?/\\]/gu;
+const BARE_TOKEN = /\[(MI_[A-F0-9]{8}_[0-9A-Z]{3,6})\]/gu;
+
+function xmlEscapeAttr(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// 工作表名称中的候选：按名称内的位置应用替换；方括号代号去掉方括号（工作表名不允许 [ ]），
+// 其他不允许的字符换成下划线，长度不超过 31，并保证不与其他工作表重名。
+function planSheetRenames(sheets, findings) {
+  const renames = new Map();
+  const applied = new Set();
+  const used = new Set((sheets || []).map((sheet) => sheet.sheetName));
+  for (const sheet of sheets || []) {
+    const inside = findings
+      .filter((finding) => finding.start >= sheet.start && finding.end <= sheet.end)
+      .sort((left, right) => right.start - left.start);
+    if (!inside.length) continue;
+    let name = sheet.sheetName;
+    for (const finding of inside) {
+      const from = finding.start - sheet.start;
+      const to = finding.end - sheet.start;
+      const replacement = String(finding.replacement ?? '').replace(BARE_TOKEN, '$1');
+      name = `${name.slice(0, from)}${replacement}${name.slice(to)}`;
+      applied.add(finding);
+    }
+    name = name.replace(SHEET_NAME_INVALID, '_').slice(0, 31) || 'Sheet';
+    used.delete(sheet.sheetName);
+    let candidate = name;
+    for (let counter = 2; used.has(candidate); counter += 1) candidate = `${name.slice(0, 31 - String(counter).length - 2)}(${counter})`;
+    used.add(candidate);
+    if (candidate !== sheet.sheetName) renames.set(sheet.sheetName, candidate);
+  }
+  return { renames, applied };
+}
+
+function renameSheetReferences(text, renames) {
+  let output = text;
+  for (const [oldName, newName] of renames) {
+    const quotedOld = `'${oldName.replace(/'/g, "''")}'!`;
+    const quotedNew = `'${newName.replace(/'/g, "''")}'!`;
+    output = output.split(quotedOld).join(quotedNew);
+    if (/^[\p{L}_][\p{L}\p{N}_.]*$/u.test(oldName)) {
+      output = output.replace(new RegExp(`(^|[^\\p{L}\\p{N}_.'!])${escapeRegex(oldName)}!`, 'gu'), (_match, before) => `${before}${quotedNew}`);
+    }
+  }
+  return output;
+}
+
+async function applySheetRenames(zip, renames) {
+  if (!renames.size) return;
+  const workbookPath = 'xl/workbook.xml';
+  let workbook = await zip.file(workbookPath)?.async('string');
+  if (workbook) {
+    workbook = workbook.replace(/<([A-Za-z_][\w.-]*:)?sheet\b([^>]*?)\bname="([^"]*)"/gu, (full, prefix = '', before, encoded) => {
+      const current = decodeXml(encoded);
+      return renames.has(current) ? `<${prefix}sheet${before}name="${xmlEscapeAttr(renames.get(current))}"` : full;
+    });
+    workbook = workbook.replace(/(<([A-Za-z_][\w.-]*:)?definedName\b[^>]*>)([\s\S]*?)(<\/\2?definedName>)/gu, (_full, open, _prefix, body, close) => `${open}${encodeXml(renameSheetReferences(decodeXml(body), renames))}${close}`);
+    zip.file(workbookPath, workbook);
+  }
+  // 公式、图表引用中的工作表名
+  for (const name of Object.keys(zip.files)) {
+    if (!/^xl\/(worksheets|charts|pivotTables|pivotCache)\/.+\.xml$/iu.test(name)) continue;
+    const xml = await zip.file(name).async('string');
+    const patched = xml.replace(/(<([A-Za-z_][\w.-]*:)?f\b[^>]*>)([\s\S]*?)(<\/\2?f>)/gu, (_full, open, _prefix, body, close) => `${open}${encodeXml(renameSheetReferences(decodeXml(body), renames))}${close}`);
+    if (patched !== xml) zip.file(name, patched);
+  }
+  // docProps/app.xml 里列出的工作表名称
+  const appPath = 'docProps/app.xml';
+  const app = await zip.file(appPath)?.async('string');
+  if (app) {
+    const patched = app.replace(/<vt:lpstr>([^<]*)<\/vt:lpstr>/gu, (full, encoded) => {
+      const current = decodeXml(encoded);
+      return renames.has(current) ? `<vt:lpstr>${encodeXml(renames.get(current))}</vt:lpstr>` : full;
+    });
+    zip.file(appPath, patched);
+  }
+}
+
+// 导出副本时清空文档属性里的作者、公司等（这些常含企业名称，随文件一起外发）。
+async function scrubDocumentProperties(zip) {
+  const corePath = 'docProps/core.xml';
+  const core = await zip.file(corePath)?.async('string');
+  if (core) {
+    const cleaned = core.replace(/<((?:dc|cp):(?:creator|lastModifiedBy|title|subject|description|keywords|category))(\s[^>]*)?>[\s\S]*?<\/\1>/gu, '<$1$2></$1>');
+    zip.file(corePath, cleaned);
+  }
+  const appPath = 'docProps/app.xml';
+  const app = await zip.file(appPath)?.async('string');
+  if (app) {
+    const cleaned = app.replace(/<(Company|Manager|HyperlinkBase)>[\s\S]*?<\/\1>/gu, '<$1></$1>');
+    zip.file(appPath, cleaned);
+  }
+}
+
 async function renderXlsx(session, findings) {
   if (typeof session?.sourcePath !== 'string' || !path.isAbsolute(session.sourcePath)) throw new Error('LOCAL_OFFICE_SESSION_INVALID');
   const zip = await JSZip.loadAsync(await fs.readFile(session.sourcePath), { checkCRC32: true });
@@ -411,6 +523,8 @@ async function renderXlsx(session, findings) {
     if (!byPart.has(cell.partName)) byPart.set(cell.partName, new Map());
     byPart.get(cell.partName).set(cell.address, result.text);
   }
+  const sheetPlan = planSheetRenames(session.sheets, enabled);
+  for (const finding of sheetPlan.applied) applied.add(finding);
   if (!applied.size) throw new Error('LOCAL_OFFICE_NO_REDACTIONS');
   let changedCells = 0;
   for (const [partName, replacements] of byPart) {
@@ -421,8 +535,10 @@ async function renderXlsx(session, findings) {
     changedCells += patched.changed;
     zip.file(partName, patched.xml);
   }
+  await applySheetRenames(zip, sheetPlan.renames);
+  await scrubDocumentProperties(zip);
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } });
-  return { buffer, redactions: applied.size, changedUnits: changedCells };
+  return { buffer, redactions: applied.size, changedUnits: changedCells, renamedSheets: sheetPlan.renames.size };
 }
 
 async function renderRedactedOffice(session, findings, outputPath) {
@@ -433,6 +549,7 @@ async function renderRedactedOffice(session, findings, outputPath) {
     bytes: rendered.buffer.length,
     redactions: rendered.redactions,
     changedUnits: rendered.changedUnits,
+    renamedSheets: rendered.renamedSheets || 0,
     longTailReport: session.longTailReport || null
   };
 }

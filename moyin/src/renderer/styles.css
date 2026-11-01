@@ -477,3 +477,12 @@ body.has-document .main-panel { overflow: visible; }
 .vault-panel .vault-explorer-controls label { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .vault-panel .vault-explorer-controls input[type=date] { width: auto; padding: 6px 6px; border: 1px solid var(--line); border-radius: 8px; }
 .vault-panel .vault-entry-list { display: block; max-height: calc(100vh - 300px); min-height: 120px; overflow-y: auto; gap: 0; }
+
+.batch-export-result { margin: 0 0 12px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); font-size: 12.5px; display: grid; gap: 6px; }
+.batch-export-result.has-failures { border-color: #e2b4ad; background: #fbefed; }
+.batch-export-result strong { font-size: 13px; }
+.batch-export-result ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.batch-export-result .reason { color: #8a3f35; }
+.batch-export-result .muted { color: var(--muted); }
+.batch-row.export-failed { border-color: #e2b4ad; background: #fbefed; }
+.batch-row.export-failed .batch-export-error { color: #8a3f35; font-weight: 650; }
