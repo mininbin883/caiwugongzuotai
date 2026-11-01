@@ -55,13 +55,14 @@
           <div id="typeList" class="type-list"></div>
         </section>
 
-        <section class="side-section" data-module-section="redact protect">
-          <div class="section-kicker">脱敏方式</div>
+        <section class="side-section" data-module-section="protect">
+          <div class="section-kicker">导出方式（高级）</div>
           <div class="segmented">
-            <button class="segment active" data-style="mask">保留轮廓</button>
+            <button class="segment active" data-style="token">可逆代号</button>
+            <button class="segment" data-style="mask">保留轮廓</button>
             <button class="segment" data-style="label">替换标签</button>
-            <button class="segment" data-style="token">可逆代号</button>
           </div>
+          <p class="field-hint">默认“可逆代号”：AI 返回后能换回原文。“保留轮廓”“替换标签”不可逆，导出后无法换回，也不会存入文件仓库。</p>
         </section>
 
         <section class="side-section" data-module-section="protect">
@@ -212,8 +213,8 @@
           </div>
           <div class="metrics">
             <div class="metric"><strong id="charCount">0</strong><span>字符</span></div>
-            <div class="metric accent"><strong id="findingCount">0</strong><span>命中</span></div>
-            <div class="metric"><strong id="enabledCount">0</strong><span>已处理</span></div>
+            <div class="metric accent"><strong id="findingCount">0</strong><span>找到</span></div>
+            <div class="metric"><strong id="enabledCount">0</strong><span>将隐藏</span></div>
           </div>
         </div>
 
@@ -349,17 +350,28 @@
               <div class="section-kicker">人工复核</div>
               <h2>识别结果</h2>
             </div>
-            <div class="export-actions">
-              <button id="exportJsonButton" class="button button-ghost">导出审计 JSON</button>
-              <button id="exportOcrTextButton" class="button button-ghost hidden">导出识别 TXT</button>
-              <button id="exportImageButton" class="button button-dark hidden">导出涂黑图片</button>
-              <button id="exportOfficeButton" class="button button-dark hidden">导出原格式文档</button>
-              <button id="exportCsvButton" class="button button-dark hidden">导出原格式 CSV</button>
-              <button id="exportTextButton" class="button button-accent">导出脱敏文本</button>
-            </div>
+            <details class="export-more">
+              <summary>更多导出方式</summary>
+              <div class="export-actions">
+                <button id="exportJsonButton" class="button button-ghost button-small">导出审计 JSON</button>
+                <button id="exportOcrTextButton" class="button button-ghost button-small hidden">导出识别 TXT</button>
+                <button id="exportImageButton" class="button button-ghost button-small hidden">导出涂黑图片</button>
+                <button id="exportOfficeButton" class="button button-ghost button-small hidden">导出原格式文档</button>
+                <button id="exportCsvButton" class="button button-ghost button-small hidden">导出原格式 CSV</button>
+                <button id="exportTextButton" class="button button-ghost button-small">导出脱敏文本 TXT</button>
+              </div>
+            </details>
           </div>
           <div id="exportAuditBox" class="audit-box hidden" role="status" aria-live="polite"></div>
           <div id="findingList" class="finding-list"></div>
+          <div class="export-bar">
+            <div class="export-bar-text">
+              <strong id="exportSummary">0 处将换成代号</strong>
+              <small id="exportSummaryDetail">导出后副本存入文件仓库并得到编号</small>
+            </div>
+            <label class="export-confirm"><input id="exportConfirm" type="checkbox"> 我已核对要隐藏的信息</label>
+            <button id="exportPrimaryButton" class="button button-accent" disabled>确认并导出副本</button>
+          </div>
         </section>
       </section>
     </main>
@@ -384,6 +396,47 @@
     </form>
   </dialog>
 
+  <dialog id="vaultGateDialog" class="vault-dialog">
+    <form method="dialog">
+      <div class="section-kicker">导出前</div>
+      <h2>需要一个文件仓库</h2>
+      <p>代号和原文的对照表会先加密保存到本机的文件仓库，AI 返回后才能换回原文。第一次使用请新建仓库并设置密码；以前建过的，请打开它。</p>
+      <div class="vault-dialog-actions">
+        <button id="vaultGateCancel" type="button" class="button button-ghost">取消</button>
+        <button id="vaultGateOpen" type="button" class="button button-ghost">打开已有仓库</button>
+        <button id="vaultGateCreate" type="button" class="button button-dark">新建仓库</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="nextStepsDialog" class="vault-dialog next-steps-dialog">
+    <form method="dialog">
+      <div class="section-kicker">副本已导出</div>
+      <h2 id="nextStepsTitle">已存为 文件 MI-000001</h2>
+      <p id="nextStepsPath" class="next-steps-path"></p>
+      <ol class="next-steps-list">
+        <li>
+          <strong>现在：把副本和“给 AI 的要求”一起发给 AI</strong>
+          <small>不要发原件、仓库或备份。要求里写明了保留方括号代号，原样复制即可。</small>
+          <textarea id="nextStepsPrompt" readonly rows="8" aria-label="给 AI 的要求"></textarea>
+          <span class="next-steps-actions">
+            <button id="nextStepsCopy" type="button" class="button button-dark button-small">复制要求</button>
+            <button id="nextStepsDownload" type="button" class="button button-ghost button-small">下载要求 TXT</button>
+          </span>
+        </li>
+        <li>
+          <strong>AI 返回后：换回原文</strong>
+          <small>在“加密仓库”点这份文件的“去逆脱敏 →”，或者直接点下面的按钮。</small>
+          <span class="next-steps-actions">
+            <button id="nextStepsRestore" type="button" class="button button-ghost button-small">去逆脱敏 →</button>
+          </span>
+        </li>
+      </ol>
+      <div class="vault-dialog-actions">
+        <button id="nextStepsNew" type="button" class="button button-ghost">处理下一份文件</button>
+        <button id="nextStepsClose" type="button" class="button button-dark">知道了</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="vaultPasswordDialog" class="vault-dialog">
     <form id="vaultPasswordForm" method="dialog">
       <div class="section-kicker">本地密钥</div>

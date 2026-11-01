@@ -314,3 +314,22 @@ h1, h2, p { margin-top: 0; }
 .editor-highlight, .editor-overlay { overflow-y: scroll; }
 .editor-highlight::-webkit-scrollbar { background: transparent; }
 .editor-highlight::-webkit-scrollbar-thumb, .editor-highlight::-webkit-scrollbar-track { background: transparent; }
+
+/* 导出栏与“接下来”卡片 */
+.export-more { position: relative; }
+.export-more summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; list-style: none; }
+.export-more summary::-webkit-details-marker { display: none; }
+.export-more[open] .export-actions { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; flex-direction: column; align-items: stretch; padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.12); min-width: 200px; }
+.export-bar { position: sticky; bottom: 0; z-index: 4; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 -6px 18px rgba(0,0,0,.06); }
+.export-bar-text { display: grid; gap: 2px; margin-right: auto; }
+.export-bar-text strong { font-size: 14px; }
+.export-bar-text small { color: var(--muted); font-size: 11px; }
+.export-confirm { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.next-steps-dialog { width: min(620px, calc(100vw - 40px)); }
+.next-steps-path { word-break: break-all; }
+.next-steps-list { display: grid; gap: 14px; margin: 4px 0 6px; padding-left: 20px; }
+.next-steps-list li { display: grid; gap: 6px; }
+.next-steps-list small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.next-steps-list textarea { width: 100%; font-size: 12px; line-height: 1.6; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #faf9f5; resize: vertical; }
+.next-steps-actions { display: flex; gap: 8px; }
+.vault-entry-restore { white-space: nowrap; }

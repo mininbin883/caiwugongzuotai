@@ -401,6 +401,7 @@ async function saveVaultEntry(event, payload) {
     findingTypes: payload?.findingTypes
   };
   let attachmentResult = null;
+  let savedEntry = null;
   if (payload?.attachmentToken) {
     const attachmentToken = String(payload.attachmentToken);
     const bundle = vaultAttachmentSessions.get(attachmentToken);
@@ -410,11 +411,14 @@ async function saveVaultEntry(event, payload) {
     }
     const saved = await addVaultEntryWithAttachments(vaultSession.context, entry, bundle.attachmentFiles);
     attachmentResult = saved.attachmentResult;
+    savedEntry = saved.entry || (saved.fileNumber ? saved : null);
     vaultAttachmentSessions.delete(attachmentToken);
   } else {
-    await addVaultEntry(vaultSession.context, entry);
+    savedEntry = await addVaultEntry(vaultSession.context, entry);
   }
-  return { ...publicVaultState(token, vaultSession), attachmentResult };
+  // 返回新记录的编号，界面据此给导出的副本命名（如 MI-000001-合同-脱敏副本.docx）。
+  const saved = savedEntry ? { id: savedEntry.id, fileNumber: savedEntry.fileNumber, name: savedEntry.name } : null;
+  return { ...publicVaultState(token, vaultSession), attachmentResult, savedEntry: saved };
 }
 
 function listVault(event, payload) {
@@ -1009,6 +1013,16 @@ function cleanupBatchOwner(ownerId) {
   batchQueue.clear((job) => job.metadata.ownerId === ownerId);
 }
 
+// 导出文件名：界面给出“编号-原名-脱敏副本”时优先使用，否则沿用原有命名。
+function exportFileName(payload, fallbackBase, extension) {
+  const hint = path.basename(String(payload?.fileNameHint || ''))
+    .replace(/[\u0000-\u001f<>:"/\\|?*]+/gu, ' ')
+    .replace(/\.[A-Za-z0-9]{1,5}$/u, '')
+    .trim()
+    .slice(0, 150);
+  return `${hint || fallbackBase}.${extension}`;
+}
+
 async function saveExport(event, payload) {
   if (!payload || typeof payload !== 'object') throw new Error('LOCAL_EXPORT_INVALID');
   if (payload.kind === 'csv') {
@@ -1017,7 +1031,7 @@ async function saveExport(event, payload) {
     if (typeof payload.text !== 'string') throw new Error('LOCAL_CSV_TEXT_INVALID');
     const result = await dialog.showSaveDialog({
       title: '导出原格式脱敏 CSV',
-      defaultPath: `${path.parse(csvSession.sourceName).name}-脱敏.csv`,
+      defaultPath: exportFileName(payload, `${path.parse(csvSession.sourceName).name}-脱敏`, 'csv'),
       filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
     });
     if (result.canceled || !result.filePath) return { canceled: true };
@@ -1030,7 +1044,7 @@ async function saveExport(event, payload) {
     if (officeSession.kind !== payload.kind) throw new Error('LOCAL_OFFICE_SESSION_KIND_MISMATCH');
     const result = await dialog.showSaveDialog({
       title: `导出原格式脱敏 ${payload.kind.toUpperCase()}`,
-      defaultPath: `${path.parse(officeSession.sourceName).name}-脱敏.${payload.kind}`,
+      defaultPath: exportFileName(payload, `${path.parse(officeSession.sourceName).name}-脱敏`, payload.kind),
       filters: [{ name: payload.kind === 'docx' ? 'Word 文档' : 'Excel 工作簿', extensions: [payload.kind] }]
     });
     if (result.canceled || !result.filePath) return { canceled: true };
@@ -1046,7 +1060,7 @@ async function saveExport(event, payload) {
         payload.findings.every((finding) => /^\[MI_[A-F0-9]{8}_[0-9A-Z]{3,6}\]$/u.test(String(finding?.replacement || '')));
       const result = await dialog.showSaveDialog({
         title: reversible ? '导出可逆代号 PDF 与坐标副本' : '导出不可恢复的涂黑 PDF',
-        defaultPath: `${path.parse(imageSession.sourceName).name}-${reversible ? '可逆代号' : '脱敏'}.pdf`,
+        defaultPath: exportFileName(payload, `${path.parse(imageSession.sourceName).name}-${reversible ? '可逆代号' : '脱敏'}`, 'pdf'),
         filters: [{ name: 'PDF 文档', extensions: ['pdf'] }]
       });
       if (result.canceled || !result.filePath) return { canceled: true };
@@ -1062,7 +1076,7 @@ async function saveExport(event, payload) {
     }
     const result = await dialog.showSaveDialog({
       title: '导出不可恢复的涂黑图片',
-      defaultPath: `${path.parse(imageSession.sourceName).name}-脱敏.png`,
+      defaultPath: exportFileName(payload, `${path.parse(imageSession.sourceName).name}-脱敏`, 'png'),
       filters: [{ name: 'PNG 图片', extensions: ['png'] }]
     });
     if (result.canceled || !result.filePath) return { canceled: true };
@@ -1072,10 +1086,7 @@ async function saveExport(event, payload) {
   if (typeof payload.text !== 'string') throw new Error('LOCAL_EXPORT_INVALID');
   if (Buffer.byteLength(payload.text, 'utf8') > EXPORT_LIMIT) throw new Error('LOCAL_EXPORT_TOO_LARGE');
   const kind = payload.kind === 'json' ? 'json' : 'txt';
-  const suggestedName = path.basename(String(payload.fileNameHint || '')).replace(/[\u0000-\u001f<>:"/\\|?*]+/gu, ' ').trim();
-  const defaultPath = suggestedName && suggestedName.toLowerCase().endsWith(`.${kind}`)
-    ? suggestedName.slice(0, 160)
-    : `脱敏结果.${kind}`;
+  const defaultPath = exportFileName(payload, '脱敏结果', kind);
   const result = await dialog.showSaveDialog({
     title: '导出脱敏结果',
     defaultPath,

@@ -2,6 +2,8 @@ import { TYPE_LABELS, analyzeText, applyFindings } from '../core/redaction-engin
 import { createTokenNonce, restoreTokens, tokenizeFindings } from '../core/reversible-token-engine.mjs';
 import { auditBeforeExport, auditItemToFinding } from '../core/export-audit.mjs';
 import { reviewRestoration, summarizeReview } from '../core/restore-review.mjs';
+import { friendlyError } from '../core/error-messages.mjs';
+import { buildAiPrompt } from '../core/ai-prompt.mjs';
 import { demoDocumentResult, workflowSteps } from '../core/workflow-demo.mjs';
 import { MODULE_DEFINITIONS, MODULE_IDS, moduleIdFromHash, nextModuleId, normalizeModuleId } from '../core/navigation-controller.mjs';
 import { autoVaultDecision, createPastedDocument } from '../core/quick-entry-controller.mjs';
@@ -16,7 +18,9 @@ const state = {
   activeModule: 'redact',
   workflowStage: 'import',
   findings: [],
-  style: 'mask',
+  style: 'token',
+  unexported: false,
+  lastExport: null,
   enabledTypes: new Set(Object.keys(TYPE_LABELS)),
   image: null,
   imageMappingValid: false,
@@ -66,6 +70,10 @@ const elements = Object.fromEntries([
   'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
   'restorePanel', 'restoreInput', 'restoreOutput', 'restoreMode', 'restoreButton', 'restoreExportButton', 'restoreOfficeButton', 'restoreReport',
   'restoreChecklist', 'restoreConfirm', 'restoreConfirmLabel', 'exportAuditBox',
+  'exportBar', 'exportSummary', 'exportSummaryDetail', 'exportConfirm', 'exportPrimaryButton',
+  'vaultGateDialog', 'vaultGateCreate', 'vaultGateOpen', 'vaultGateCancel',
+  'nextStepsDialog', 'nextStepsTitle', 'nextStepsPath', 'nextStepsPrompt', 'nextStepsCopy', 'nextStepsDownload',
+  'nextStepsRestore', 'nextStepsNew', 'nextStepsClose',
   'sourceEditorWrap', 'sourceHighlight', 'selectionBar', 'selectionHint', 'selectionActions', 'selectionPreview', 'selectionType',
   'selectionHideOnceButton', 'selectionHideAllButton', 'selectionKeepButton',
   'nerStatus', 'nerMeta', 'nerThreshold', 'nerSelectButton', 'nerClearButton', 'nerAnalyzeButton',
@@ -188,6 +196,7 @@ function renderWorkflowProgress(stage = state.workflowStage) {
 }
 
 function loadDemo() {
+  if (!confirmDiscardUnexported('载入示例')) return;
   state.style = 'token';
   elements.customTerms.value = '流光计划';
   document.querySelectorAll('[data-style]').forEach((item) => item.classList.toggle('active', item.dataset.style === 'token'));
@@ -212,6 +221,7 @@ function updatePasteTextCounter() {
 }
 
 function openPasteTextDialog() {
+  if (!confirmDiscardUnexported('粘贴新文字')) return;
   elements.pasteTextName.value = '粘贴文字';
   elements.pasteTextInput.value = '';
   elements.pasteTextError.textContent = '';
@@ -236,7 +246,7 @@ function vaultErrorMessage(error) {
   if (message.includes('LOCAL_VAULT_BACKUP_FORMAT_INVALID')) return '所选文件不是墨隐加密备份';
   if (message.includes('LOCAL_VAULT_IMPORT_POLICY_INVALID')) return '导入冲突策略无效';
   if (message.includes('EEXIST')) return '目标仓库已经存在，请选择新的文件名';
-  return message;
+  return friendlyError(error);
 }
 
 function requestVaultPassword(mode) {
@@ -418,7 +428,7 @@ function renderVaultState() {
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'vault-entry-delete';
-    remove.title = `删除 ${entry.fileNumber}`;
+    remove.title = `删除 ${entry.fileNumber}（删除后，外面流转的这份副本将无法再逆脱敏）`;
     remove.setAttribute('aria-label', `删除 ${entry.name}`);
     remove.textContent = '×';
     remove.addEventListener('click', () => deleteVaultRecord(entry));
@@ -432,6 +442,15 @@ function renderVaultState() {
       exportButton.textContent = attachment.role === 'original' ? '原件' : attachment.role === 'redacted-copy' ? '脱敏副本' : '附件';
       exportButton.addEventListener('click', () => exportStoredAttachment(entry, attachment));
       attachmentActions.append(exportButton);
+    }
+    if (entry.kind === 'reversible-map') {
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.className = 'button button-ghost button-small vault-entry-restore';
+      restore.textContent = '去逆脱敏 →';
+      restore.title = `导入 AI 返回的内容，把 ${entry.fileNumber} 的代号换回原文`;
+      restore.addEventListener('click', () => loadVaultEntry(entry.id));
+      attachmentActions.append(restore);
     }
     row.append(button, attachmentActions, remove);
     elements.vaultEntryList.append(row);
@@ -476,7 +495,7 @@ function formatBytes(bytes) {
 }
 
 async function deleteVaultRecord(entry) {
-  if (!state.vault || !window.confirm(`确定删除 ${entry.fileNumber} · ${entry.name}？\n删除后可通过“压缩回收空间”清除旧密文块。`)) return;
+  if (!state.vault || !window.confirm(`确定删除 ${entry.fileNumber} · ${entry.name}？\n\n删除后，已经发给 AI 的这份副本就再也不能换回原文了。如果以后还要逆脱敏，请先“导出备份”。\n\n你的原文件不受影响。`)) return;
   try {
     const value = await window.veilforge.deleteVaultEntry(state.vault.token, entry.id);
     if (state.restoreEntry?.id === entry.id) clearRestoreSession();
@@ -660,7 +679,7 @@ async function initializeBundledNer() {
     if (value?.loaded) showToast(`随包中文模型已校验：${value.modelPackId}`);
   } catch (error) {
     state.ner = { loaded: false, reason: String(error?.message || error) };
-    showToast(`随包模型校验失败：${error?.message || error}`, 'error');
+    showToast(`随包模型校验失败：${friendlyError(error)}`, 'error');
   } finally {
     state.nerBusy = false;
     renderNerState();
@@ -1115,7 +1134,40 @@ function syncHighlightScroll() {
   elements.sourceHighlight.scrollLeft = elements.sourceEditor.scrollLeft;
 }
 
+// ---------- 导出栏 ----------
+function primaryExportKind() {
+  if (state.quickEntryMode === 'image-to-text') return 'txt';
+  if (state.office && state.officeMappingValid) return state.office.kind;
+  if (state.csv && state.csvMappingValid) return 'csv';
+  if (state.image && state.imageMappingValid) return state.image.kind === 'pdf' ? 'pdf' : 'image';
+  return 'txt';
+}
+
+const EXPORT_FORMAT_LABELS = { txt: 'TXT 文本', docx: 'Word（DOCX）', xlsx: 'Excel（XLSX）', csv: 'CSV', pdf: 'PDF', image: 'PNG 图片（涂黑）' };
+
+function exportIsReversible(kind = primaryExportKind()) {
+  return state.style === 'token' && kind !== 'image';
+}
+
+function renderExportBar() {
+  if (!elements.exportSummary) return;
+  const kind = primaryExportKind();
+  const count = state.findings.filter((item) => item.enabled).length;
+  const reversible = exportIsReversible(kind);
+  elements.exportSummary.textContent = reversible
+    ? `${count.toLocaleString('zh-CN')} 处将换成代号 · 导出为 ${EXPORT_FORMAT_LABELS[kind]}`
+    : `${count.toLocaleString('zh-CN')} 处将隐藏（不可逆）· 导出为 ${EXPORT_FORMAT_LABELS[kind]}`;
+  elements.exportSummaryDetail.textContent = reversible
+    ? '对照表先加密存入文件仓库并得到编号，AI 返回后可换回原文'
+    : kind === 'image'
+      ? '图片只能涂黑导出，无法换回原文'
+      : '当前在保护设置里选了不可逆方式，导出后无法换回原文';
+  elements.exportPrimaryButton.disabled = !state.sourceText || !count || !elements.exportConfirm.checked || Boolean(state.restoreEntry);
+  elements.exportPrimaryButton.title = !count ? '没有要隐藏的内容' : !elements.exportConfirm.checked ? '请先勾选“我已核对要隐藏的信息”' : '';
+}
+
 function refreshPreview() {
+  renderExportBar();
   renderSourceHighlight();
   renderExportAudit();
   elements.redactedEditor.value = redactedText();
@@ -1167,6 +1219,9 @@ function applyDocumentResult(result, message = '文档已在本机解析完成')
   state.reversibleNonce = createTokenNonce();
   state.reversibleCache = null;
   state.manualFindings = [];
+  state.unexported = true;
+  state.lastExport = null;
+  if (elements.exportConfirm) elements.exportConfirm.checked = false;
   state.restoreEntry = null;
   setActiveModule('redact');
   renderWorkflowProgress('review');
@@ -1283,7 +1338,7 @@ async function openBatchJob(id) {
     const result = await window.veilforge.openBatchResult(id);
     applyDocumentResult(result, '批处理结果已载入，可继续人工复核');
   } catch (error) {
-    showToast(`载入任务失败：${error?.message || error}`, 'error');
+    showToast(`载入任务失败：${friendlyError(error)}`, 'error');
   }
 }
 
@@ -1293,7 +1348,7 @@ async function cancelBatchJob(id) {
     state.batchJobs.set(id, response.job);
     renderBatchJobs();
   } catch (error) {
-    showToast(`取消失败：${error?.message || error}`, 'error');
+    showToast(`取消失败：${friendlyError(error)}`, 'error');
   }
 }
 
@@ -1305,7 +1360,7 @@ async function enqueueDroppedFiles(files) {
     renderBatchJobs();
     showToast(`已加入 ${jobs.length} 个后台任务`);
   } catch (error) {
-    showToast(`批量导入失败：${error?.message || error}`, 'error');
+    showToast(`批量导入失败：${friendlyError(error)}`, 'error');
   }
 }
 
@@ -1318,11 +1373,12 @@ async function pickBatchDocuments() {
     setActiveModule('batch');
     showToast(`已选择 ${jobs.length} 个文件，正在本机依次处理`);
   } catch (error) {
-    showToast(`批量选择失败：${error?.message || error}`, 'error');
+    showToast(`批量选择失败：${friendlyError(error)}`, 'error');
   }
 }
 
 async function openDocument() {
+  if (!confirmDiscardUnexported('导入新文档')) return;
   try {
     let result = await window.veilforge.pickDocument();
     if (!result) return;
@@ -1346,18 +1402,25 @@ async function openDocument() {
     applyDocumentResult(result);
   } catch (error) {
     const message = String(error?.message || error);
-    showToast(`导入失败：${message.includes('LOCAL_PDF_ENCRYPTED') ? 'PDF 已加密，请先输入密码解密后再导入' : message}`, 'error');
+    showToast(`导入失败：${friendlyError(message)}`, 'error');
   }
 }
 
 async function openImageToText() {
+  if (!confirmDiscardUnexported('导入新图片')) return;
   try {
     const result = await window.veilforge.pickImageForText();
     if (!result) return;
     applyDocumentResult(result, '图片文字已在本机识别，可人工校正后导出 TXT');
   } catch (error) {
-    showToast(`图片转 TXT 失败：${error?.message || error}`, 'error');
+    showToast(`图片转 TXT 失败：${friendlyError(error)}`, 'error');
   }
+}
+
+// ---------- 未导出内容保护 ----------
+function confirmDiscardUnexported(action = '继续') {
+  if (!state.unexported || !state.sourceText || state.restoreEntry) return true;
+  return window.confirm(`当前文档还没有导出。${action}会清除这次的核对结果（包括手动补选）。\n\n确定要${action}吗？`);
 }
 
 function reset() {
@@ -1380,6 +1443,8 @@ function reset() {
   state.reversibleCache = null;
   state.restoreEntry = null;
   state.restoreResult = null;
+  state.unexported = false;
+  state.manualFindings = [];
   setActiveModule('redact');
   renderWorkflowProgress('import');
   clearNerFindings();
@@ -1438,8 +1503,8 @@ async function saveCurrentToVault({ notify = false, includeAttachments = false }
   return value;
 }
 
-async function exportResult(kind) {
-  if (!state.sourceText) return;
+async function exportResult(kind, options = {}) {
+  if (!state.sourceText) return null;
   try {
     const enabled = state.findings.filter((item) => item.enabled);
     const tokenAssignments = state.style === 'token'
@@ -1453,6 +1518,7 @@ async function exportResult(kind) {
       sourceToken: state.sourceToken,
       sourceName: state.sourceName,
       text: redactedText(),
+      fileNameHint: options.fileNameHint,
       findings: enabled.map(({ type, label, start, end, replacement }) => ({
         type,
         label,
@@ -1468,7 +1534,7 @@ async function exportResult(kind) {
       renderWorkflowProgress('complete');
       let vaultSuffix = '';
       let toastKind = 'ok';
-      const autoSave = autoVaultDecision({
+      const autoSave = options.skipAutoSave ? { shouldSave: false } : autoVaultDecision({
         enabled: state.autoSaveToVault,
         vault: state.vault,
         exportResult: result,
@@ -1504,11 +1570,141 @@ async function exportResult(kind) {
       const csv = result.originalFormatPreserved
         ? `，CSV ${result.encoding.toUpperCase()} / ${result.delimiterName}分隔 / ${result.lineEndingName} 已保留${result.formulaCellsEscaped ? `，已阻断 ${result.formulaCellsEscaped} 个公式注入单元格` : ''}`
         : '';
-      showToast(`已导出 ${result.bytes.toLocaleString('zh-CN')} bytes${suffix}${preserved}${geometry}${pdfa}${xfa}${signature}${resigning}${veraPdf}${csv}${vaultSuffix}`, toastKind);
+      if (!options.quiet) showToast(`已导出${suffix}${preserved}${geometry}${pdfa}${xfa}${signature}${resigning}${veraPdf}${csv}${vaultSuffix}`, toastKind);
+      if (kind !== 'json') state.unexported = false;
     }
+    return result || null;
   } catch (error) {
-    showToast(`导出失败：${error?.message || error}`, 'error');
+    if (options.throwOnError) throw error;
+    showToast(`导出失败：${friendlyError(error)}`, 'error');
+    return null;
   }
+}
+
+// ---------- 主导出流程：先存仓库得到编号，再按“编号-原名-脱敏副本”导出，最后给出下一步 ----------
+async function createVaultFlow() {
+  const password = await requestVaultPassword('create');
+  if (!password) return false;
+  try {
+    const value = await window.veilforge.createVault(password);
+    if (value?.canceled) return false;
+    state.batchAutoVault = false;
+    state.vaultFilters = { query: '', kind: 'all', dateFrom: '', dateTo: '' };
+    applyVaultState(value);
+    showToast('文件仓库已创建并加密，请记住仓库密码');
+    return true;
+  } catch (error) {
+    showToast(`新建失败：${vaultErrorMessage(error)}`, 'error');
+    return false;
+  }
+}
+
+async function openVaultFlow() {
+  const password = await requestVaultPassword('open');
+  if (!password) return false;
+  try {
+    const value = await window.veilforge.openVault(password);
+    if (value?.canceled) return false;
+    state.batchAutoVault = false;
+    state.vaultFilters = { query: '', kind: 'all', dateFrom: '', dateTo: '' };
+    applyVaultState(value);
+    showToast('文件仓库已解锁');
+    return true;
+  } catch (error) {
+    showToast(`打开失败：${vaultErrorMessage(error)}`, 'error');
+    return false;
+  }
+}
+
+let vaultGateResolve = null;
+function requestVaultForExport() {
+  if (state.vault) return Promise.resolve(true);
+  elements.vaultGateDialog.showModal();
+  return new Promise((resolve) => { vaultGateResolve = resolve; });
+}
+async function finishVaultGate(choice) {
+  if (elements.vaultGateDialog.open) elements.vaultGateDialog.close();
+  const resolve = vaultGateResolve;
+  vaultGateResolve = null;
+  let ok = false;
+  if (choice === 'create') ok = await createVaultFlow();
+  if (choice === 'open') ok = await openVaultFlow();
+  resolve?.(ok && Boolean(state.vault));
+}
+
+function exportBaseName() {
+  return (state.sourceName || '脱敏结果').replace(/\.[A-Za-z0-9]{1,5}$/u, '').replace(/[\\/:*?"<>|]+/gu, ' ').trim().slice(0, 80) || '脱敏结果';
+}
+
+async function exportPrimary() {
+  if (!state.sourceText || state.restoreEntry) return;
+  const kind = primaryExportKind();
+  if (kind === 'txt' && state.quickEntryMode === 'image-to-text' && state.style !== 'token') {
+    await exportRecognizedText();
+    return;
+  }
+  if (!exportIsReversible(kind)) {
+    const result = await exportResult(kind);
+    if (result && !result.canceled) showToast(`已导出：${result.path || ''}`);
+    return;
+  }
+  if (!(await requestVaultForExport())) {
+    showToast('已取消导出：需要文件仓库保存代号对照表', 'error');
+    return;
+  }
+  elements.exportPrimaryButton.disabled = true;
+  let saved = null;
+  try {
+    const value = await saveCurrentToVault();
+    saved = value.savedEntry;
+    if (!saved?.fileNumber) throw new Error('LOCAL_VAULT_WRITE_INCOMPLETE');
+    const result = await exportResult(kind, {
+      fileNameHint: `${saved.fileNumber}-${exportBaseName()}-脱敏副本`,
+      skipAutoSave: true,
+      quiet: true,
+      throwOnError: true
+    });
+    if (!result || result.canceled) {
+      // 用户取消了“另存为”：撤销刚写入的仓库记录，避免留下没有副本的空编号。
+      await window.veilforge.deleteVaultEntry(state.vault.token, saved.id).then(applyVaultStateAndFilters).catch(() => {});
+      showToast('已取消导出，仓库未保留这次记录');
+      return;
+    }
+    state.lastExport = { ...saved, path: result.path || '', kind, mapping: reversiblePreview().mapping };
+    showNextSteps();
+  } catch (error) {
+    if (saved?.id && state.vault) await window.veilforge.deleteVaultEntry(state.vault.token, saved.id).then(applyVaultStateAndFilters).catch(() => {});
+    showToast(`导出失败：${friendlyError(error)}`, 'error');
+  } finally {
+    renderExportBar();
+  }
+}
+
+function currentAiPrompt() {
+  const info = state.lastExport;
+  if (!info) return '';
+  const formatNames = { txt: '文本', docx: 'Word 文档', xlsx: 'Excel 表格', csv: 'CSV 表格', pdf: 'PDF 文档' };
+  return buildAiPrompt({ fileNumber: info.fileNumber, mapping: info.mapping, formatLabel: formatNames[info.kind] || '' });
+}
+
+function showNextSteps() {
+  const info = state.lastExport;
+  if (!info) return;
+  elements.nextStepsTitle.textContent = `已存为 文件 ${info.fileNumber}`;
+  elements.nextStepsPath.textContent = info.path ? `副本保存在：${info.path}` : '';
+  elements.nextStepsPrompt.value = currentAiPrompt();
+  elements.nextStepsDialog.showModal();
+  elements.nextStepsPrompt.scrollTop = 0;
+}
+
+function copyFromTextarea(textarea) {
+  // 剪贴板权限在安全模式下被禁用，改用选中后复制。
+  textarea.focus();
+  textarea.select();
+  const ok = document.execCommand('copy');
+  textarea.setSelectionRange(0, 0);
+  textarea.scrollTop = 0;
+  return ok;
 }
 
 async function exportRecognizedText() {
@@ -1530,7 +1726,7 @@ async function exportRecognizedText() {
       showToast(`识别文本已导出 ${result.bytes.toLocaleString('zh-CN')} bytes${result.vaultAttachmentFiles ? `，${result.vaultAttachmentFiles} 个文件可加密入库` : ''}`);
     }
   } catch (error) {
-    showToast(`导出识别 TXT 失败：${error?.message || error}`, 'error');
+    showToast(`导出识别 TXT 失败：${friendlyError(error)}`, 'error');
   }
 }
 
@@ -1609,7 +1805,7 @@ elements.batchClearButton.addEventListener('click', async () => {
     for (const job of response.jobs) state.batchJobs.set(job.id, job);
     renderBatchJobs();
   } catch (error) {
-    showToast(`清理失败：${error?.message || error}`, 'error');
+    showToast(`清理失败：${friendlyError(error)}`, 'error');
   }
 });
 
@@ -1620,7 +1816,7 @@ elements.batchExportButton.addEventListener('click', async () => {
       if (response.canceled) state.batchExport.cancelRequested = true;
       renderBatchJobs();
     } catch (error) {
-      showToast(`停止导出失败：${error?.message || error}`, 'error');
+      showToast(`停止导出失败：${friendlyError(error)}`, 'error');
     }
     return;
   }
@@ -1640,7 +1836,7 @@ elements.batchExportButton.addEventListener('click', async () => {
     else if (result.canceled) showToast(`已停止导出：完成 ${result.exported} 个，清单已保存${vaultSuffix}`);
     else showToast(`批量导出完成：${result.exported} 个，失败 ${result.failed} 个${vaultSuffix}`, result.vaultSave?.failed ? 'error' : 'ok');
   } catch (error) {
-    showToast(`批量导出失败：${error?.message || error}`, 'error');
+    showToast(`批量导出失败：${friendlyError(error)}`, 'error');
   } finally {
     state.batchExport = null;
     renderBatchJobs();
@@ -1680,7 +1876,7 @@ elements.pdfPasswordDialog.addEventListener('cancel', (event) => {
   event.preventDefault();
   finishPdfPassword(null);
 });
-elements.resetButton.addEventListener('click', reset);
+elements.resetButton.addEventListener('click', () => { if (confirmDiscardUnexported('清空')) reset(); });
 for (const eventName of ['select', 'mouseup', 'keyup']) elements.sourceEditor.addEventListener(eventName, updateSelectionBar);
 elements.sourceEditor.addEventListener('scroll', syncHighlightScroll);
 new ResizeObserver(() => syncHighlightScroll()).observe(elements.sourceEditor);
@@ -1733,7 +1929,7 @@ elements.nerSelectButton.addEventListener('click', async () => {
     runAnalysis();
     showToast(`离线模型已加载：${value.name} · ${(value.modelBytes / 1024 / 1024).toFixed(1)} MB`);
   } catch (error) {
-    showToast(`模型加载失败：${error?.message || error}`, 'error');
+    showToast(`模型加载失败：${friendlyError(error)}`, 'error');
   } finally {
     state.nerBusy = false;
     renderNerState();
@@ -1749,7 +1945,7 @@ elements.nerClearButton.addEventListener('click', async () => {
     runAnalysis();
     showToast('离线语义模型已卸载');
   } catch (error) {
-    showToast(`模型卸载失败：${error?.message || error}`, 'error');
+    showToast(`模型卸载失败：${friendlyError(error)}`, 'error');
   } finally {
     state.nerBusy = false;
     renderNerState();
@@ -1769,7 +1965,7 @@ elements.nerAnalyzeButton.addEventListener('click', async () => {
     showToast(`模型识别完成：采纳 ${value.accepted} 项，待复核 ${value.review} 项，${value.tokens} 个词元 / ${value.windows} 个窗口`);
   } catch (error) {
     const message = String(error?.message || error);
-    showToast(message.includes('LOCAL_NER_MODEL_NOT_LOADED') ? '请先选择本地 ONNX 模型目录' : `语义识别失败：${message}`, 'error');
+    showToast(`语义识别失败：${friendlyError(message)}`, 'error');
   } finally {
     state.nerBusy = false;
     renderNerState();
@@ -1784,7 +1980,7 @@ elements.ocrRapidButton.addEventListener('click', async () => {
     state.ocrBackend = value;
     showToast(`RapidOCR 已启用：${value.modelPack?.id || 'PP-OCRv6'}`);
   } catch (error) {
-    showToast(`RapidOCR 启用失败：${error?.message || error}`, 'error');
+    showToast(`RapidOCR 启用失败：${friendlyError(error)}`, 'error');
   } finally {
     state.ocrBackendBusy = false;
     renderOcrBackendState();
@@ -1797,13 +1993,42 @@ elements.ocrTesseractButton.addEventListener('click', async () => {
     state.ocrBackend = await window.veilforge.useTesseractBackend();
     showToast('已切换到 Tesseract.js');
   } catch (error) {
-    showToast(`OCR 切换失败：${error?.message || error}`, 'error');
+    showToast(`OCR 切换失败：${friendlyError(error)}`, 'error');
   } finally {
     state.ocrBackendBusy = false;
     renderOcrBackendState();
   }
 });
 elements.exportTextButton.addEventListener('click', () => exportResult('txt'));
+elements.exportPrimaryButton.addEventListener('click', exportPrimary);
+elements.exportConfirm.addEventListener('change', renderExportBar);
+elements.vaultGateCreate.addEventListener('click', () => finishVaultGate('create'));
+elements.vaultGateOpen.addEventListener('click', () => finishVaultGate('open'));
+elements.vaultGateCancel.addEventListener('click', () => finishVaultGate(null));
+elements.vaultGateDialog.addEventListener('cancel', (event) => { event.preventDefault(); finishVaultGate(null); });
+elements.nextStepsCopy.addEventListener('click', () => {
+  showToast(copyFromTextarea(elements.nextStepsPrompt) ? '已复制“给 AI 的要求”，粘贴到 AI 对话框即可' : '复制失败，请手动全选后复制', 'ok');
+});
+elements.nextStepsDownload.addEventListener('click', async () => {
+  const info = state.lastExport;
+  if (!info) return;
+  try {
+    const result = await window.veilforge.exportResult({ kind: 'txt', text: currentAiPrompt(), findings: [], fileNameHint: `${info.fileNumber}-给AI的要求` });
+    if (result && !result.canceled) showToast('已下载“给 AI 的要求”');
+  } catch (error) {
+    showToast(`下载失败：${friendlyError(error)}`, 'error');
+  }
+});
+elements.nextStepsRestore.addEventListener('click', () => {
+  const info = state.lastExport;
+  elements.nextStepsDialog.close();
+  if (info?.id && state.vault) loadVaultEntry(info.id);
+});
+elements.nextStepsNew.addEventListener('click', () => {
+  elements.nextStepsDialog.close();
+  reset();
+});
+elements.nextStepsClose.addEventListener('click', () => elements.nextStepsDialog.close());
 elements.exportJsonButton.addEventListener('click', () => exportResult('json'));
 elements.exportOcrTextButton.addEventListener('click', exportRecognizedText);
 elements.exportImageButton.addEventListener('click', () => exportResult(state.image?.kind || 'image'));
@@ -1829,36 +2054,12 @@ elements.vaultPasswordDialog.addEventListener('cancel', (event) => {
   finishVaultPassword(null);
 });
 elements.vaultCreateButton.addEventListener('click', async () => {
-  const password = await requestVaultPassword('create');
-  if (!password) return;
-  try {
-    const value = await window.veilforge.createVault(password);
-    if (value?.canceled) return;
-    state.autoSaveToVault = false;
-    state.batchAutoVault = false;
-    state.vaultFilters = { query: '', kind: 'all', dateFrom: '', dateTo: '' };
-    clearRestoreSession();
-    applyVaultState(value);
-    showToast('AES-256-GCM 加密仓库已创建');
-  } catch (error) {
-    showToast(`新建失败：${vaultErrorMessage(error)}`, 'error');
-  }
+  clearRestoreSession();
+  await createVaultFlow();
 });
 elements.vaultOpenButton.addEventListener('click', async () => {
-  const password = await requestVaultPassword('open');
-  if (!password) return;
-  try {
-    const value = await window.veilforge.openVault(password);
-    if (value?.canceled) return;
-    state.autoSaveToVault = false;
-    state.batchAutoVault = false;
-    state.vaultFilters = { query: '', kind: 'all', dateFrom: '', dateTo: '' };
-    clearRestoreSession();
-    applyVaultState(value);
-    showToast('加密仓库已解锁');
-  } catch (error) {
-    showToast(`打开失败：${vaultErrorMessage(error)}`, 'error');
-  }
+  clearRestoreSession();
+  await openVaultFlow();
 });
 elements.vaultSaveButton.addEventListener('click', async () => {
   if (!state.vault || !state.sourceText) return;
@@ -2115,7 +2316,7 @@ elements.restoreButton.addEventListener('click', () => {
     updateRestoreExportState();
     showToast(result.requiresReview ? '逆脱敏完成，请按核对单逐项确认' : '逆脱敏完成，代号已在本机换回');
   } catch (error) {
-    showToast(`逆脱敏失败：${error?.message || error}`, 'error');
+    showToast(`逆脱敏失败：${friendlyError(error)}`, 'error');
   }
 });
 elements.restoreExportButton.addEventListener('click', async () => {
@@ -2129,7 +2330,7 @@ elements.restoreExportButton.addEventListener('click', async () => {
     });
     if (result && !result.canceled) showToast(`逆脱敏结果已导出 ${result.bytes.toLocaleString('zh-CN')} bytes`);
   } catch (error) {
-    showToast(`导出失败：${error?.message || error}`, 'error');
+    showToast(`导出失败：${friendlyError(error)}`, 'error');
   }
 });
 elements.restoreOfficeButton.addEventListener('click', async () => {
@@ -2154,7 +2355,7 @@ elements.restoreOfficeButton.addEventListener('click', async () => {
     elements.restoreReport.classList.toggle('needs-review', !result.complete);
     showToast(result.complete ? `原格式逆脱敏完成：${String(result.kind || 'document').toUpperCase()}` : '原格式逆脱敏完成，请核对报告');
   } catch (error) {
-    showToast(`原格式逆脱敏失败：${error?.message || error}`, 'error');
+    showToast(`原格式逆脱敏失败：${friendlyError(error)}`, 'error');
   }
 });
 elements.pagePreviousButton.addEventListener('click', () => {
@@ -2193,7 +2394,7 @@ elements.ocrCorrectionApplyButton.addEventListener('click', async () => {
     renderImagePage();
     showToast(`已应用 ${result.changed} 项校正，剩余 ${result.remaining} 项待复核`);
   } catch (error) {
-    showToast(`OCR 校正失败：${error?.message || error}`, 'error');
+    showToast(`OCR 校正失败：${friendlyError(error)}`, 'error');
   } finally {
     elements.ocrCorrectionApplyButton.disabled = false;
   }
@@ -2204,6 +2405,7 @@ for (const button of document.querySelectorAll('[data-style]')) {
     state.style = button.dataset.style;
     document.querySelectorAll('[data-style]').forEach((item) => item.classList.toggle('active', item === button));
     runAnalysis();
+    renderExportBar();
     renderVaultState();
   });
 }
