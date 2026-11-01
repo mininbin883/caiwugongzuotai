@@ -145,5 +145,104 @@ export function collectTableColumns(input, enabledTypes) {
     if (lineEnd >= text.length) break;
     lineStart = lineEnd + 1;
   }
+  if (enabledTypes.has('person') || enabledTypes.has('company')) results.push(...inferColumnsByContent(text, enabledTypes));
+  return results;
+}
+
+// ---------- 按内容推断列 ----------
+// 科目余额表、往来明细这类台账，人名常和科目、单位混在同一列（如“科目名称”“核算项目”），表头认不出。
+// 这里按列统计“像人名”的格子：比例足够高时，把这些格子识别为人名；整列都像人名的直接采纳，混合列里的标为需核对。
+
+// 以常见姓氏开头、但其实是财务/业务词的前两个字。
+const BUSINESS_PREFIXES = new Set(('费用 成本 收入 利息 利润 应收 应付 应交 预付 预收 其他 管理 销售 财务 研发 生产 制造 工资 薪酬 福利 社保 保险 公积 税金 ' +
+  '现金 银行 存款 资本 资产 负债 折旧 摊销 合计 小计 总计 余额 期初 期末 本期 借方 贷方 项目 工程 材料 设备 劳务 服务 办公 差旅 招待 通讯 ' +
+  '交通 车辆 运输 燃料 汽油 维修 修理 房租 房屋 租金 租赁 押金 保证 备用 暂估 往来 投资 股本 实收 盈余 未分 分配 结转 调整 营业 主营 库存 存货 ' +
+  '原材 周转 包装 低值 固定 无形 长期 短期 递延 坏账 减值 公允 汇兑 手续 佣金 罚款 捐赠 补贴 奖金 水电 水费 电费 物业 广告 宣传 咨询 审计 培训 ' +
+  '会议 业务 安全 环保 绿化 道路 排水 管网 施工 安装 监理 设计 检测 试验 人民 美元 欧元 港币 外币 内部 关联 代扣 代缴 个人 职工 教育 工会 经费 ' +
+  '印花 城建 增值 所得 进项 销项 转出 待抵 待认 未交 已交 简易 中国 国家 国内 国际 华东 华北 华南 华中 西北 西南 东北 山东 江苏 浙江 广东 ' +
+  '北京 上海 天津 重庆 河北 河南 湖北 湖南 安徽 福建 江西 陕西 山西 甘肃 云南 贵州 四川 辽宁 吉林 黑龙 宁夏 青海 新疆 西藏 广西 海南 内蒙 ' +
+  '潍坊 青岛 济南 烟台 临沂 淄博 东营 威海 日照 滨州 德州 聊城 菏泽 济宁 泰安 枣庄 莱芜 寿光 青州 诸城 高密 昌邑 安丘 昌乐 临朐 寒亭 坊子 奎文 潍城 ' +
+  '高新 开发 经济 技术 科技 信息 网络 电子 软件 系统 平台 数据 电力 电气 能源 石油 化工 钢铁 建材 建筑 建设 市政 交运 物流 贸易 商贸 实业 置业 ' +
+  '地产 房地 酒店 餐饮 文化 传媒 教学 学校 医院 医疗 药品 食品 农业 林业 牧业 渔业 水利 环境 节能 新能 汽车 机械 五金 电器 家具 服装 纺织 印刷 ' +
+  '包材 化学 石材 木材 钢材 水泥 沥青 砂石 苗木 花卉 养护 保洁 安保 劳保 礼品 茶叶 烟酒 酒水 宾馆 饭店 超市 商店 商行 经营 门市 加工 厂房 ' +
+  '车间 仓库 宿舍 食堂 伙食 餐费 交际 应酬 差费 路费 油费 过路 停车 快递 邮寄 打印 复印 耗材 配件 零件 备件 工具 仪器 仪表 计量 测量 勘察 ' +
+  '规划 评估 鉴定 认证 专利 商标 版权 许可 资质 年检 年审 上牌 保养 轮胎 机油 柴油 天然 燃气 暖气 供暖 供热 供水 供电 排污 垃圾 清运').split(/\s+/u));
+
+const ORG_SUFFIX = /(?:置业|实业|商贸|贸易|物流|传媒|餐饮|酒店|饭店|饭庄|宾馆|超市|商行|商店|经营部|门市部|经销处|加工厂|合作社|事务所|研究所|研究院|医院|学校|支行|分行|控股|地产|建材|机械|电器|五金|汽修|酒业|茶行|印务|门诊|药店|药房|工作室|中心|集团|公司|厂|店|馆|行|社|部|处)(?:（[^）]{1,12}）)?$/u;
+
+function strictPersonName(value) {
+  if (!/^\p{Script=Han}{2,3}$/u.test(value)) return false;
+  if (!looksLikeSurname(value)) return false;
+  if (NAME_STOPWORDS.has(value) || BUSINESS_PREFIXES.has(value.slice(0, 2))) return false;
+  // 以这些字结尾的多为科目、部门或单位，而不是人名。
+  if (/[费款税账部处科室组局厅站队司厂店馆院校委办]$/u.test(value)) return false;
+  return true;
+}
+
+function orgLike(value) {
+  return value.length >= 4 && /^\p{Script=Han}/u.test(value) && ORG_SUFFIX.test(value) && !BUSINESS_PREFIXES.has(value) && !/费用|成本|收入|款$/u.test(value);
+}
+
+function inferColumnsByContent(text, enabledTypes) {
+  const results = [];
+  let block = [];
+  const flush = () => {
+    if (block.length >= 4) results.push(...inferBlock(text, block, enabledTypes));
+    block = [];
+  };
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    let lineEnd = text.indexOf('\n', lineStart);
+    if (lineEnd < 0) lineEnd = text.length;
+    let line = text.slice(lineStart, lineEnd);
+    if (line.endsWith('\r')) line = line.slice(0, -1);
+    if (!line.includes('\t') || /^【工作表[:：]/u.test(line)) flush();
+    else block.push({ lineStart, line });
+    if (lineEnd >= text.length) break;
+    lineStart = lineEnd + 1;
+  }
+  flush();
+  return results;
+}
+
+function inferBlock(text, block, enabledTypes) {
+  const columns = new Map();
+  let headerCells = null;
+  for (const [rowIndex, { lineStart, line }] of block.entries()) {
+    const cells = splitLine(line, '\t');
+    if (rowIndex === 0) headerCells = cells.map((cell) => line.slice(cell.start, cell.end).trim());
+    cells.forEach((cell, index) => {
+      const [start, end] = trimRange(line, cell.start, cell.end);
+      if (end <= start) return;
+      const value = line.slice(start, end);
+      if (!/\p{Script=Han}/u.test(value)) return;
+      let column = columns.get(index);
+      if (!column) columns.set(index, (column = { textual: 0, names: [], orgs: [] }));
+      column.textual += 1;
+      if (strictPersonName(value)) column.names.push({ value, start: lineStart + start });
+      else if (orgLike(value)) column.orgs.push({ value, start: lineStart + start });
+    });
+  }
+  const results = [];
+  for (const [index, column] of columns) {
+    const nameRatio = column.names.length / Math.max(1, column.textual);
+    const counterparty = column.names.length + column.orgs.length;
+    // 至少 3 个像人名的格子，且占这一列文字格的四分之一以上，才按人名列处理。
+    if (column.names.length < 3 || nameRatio < 0.25) continue;
+    const header = headerCells?.[index] && !/\d/u.test(headerCells[index]) && headerCells[index].length <= 10 ? headerCells[index] : `第 ${index + 1} 列`;
+    const strong = nameRatio >= 0.6;
+    const hint = `按内容推断：${header}${strong ? '多为人名' : '中混有人名'}`;
+    if (enabledTypes.has('person')) {
+      for (const item of column.names) {
+        results.push({ type: 'person', value: item.value, start: item.start, end: item.start + item.value.length, hint, reviewRequired: !strong });
+      }
+    }
+    // 同一列里不带“公司”后缀的单位名称（如“××置业”“××饭店”）也一并列出，标为需核对。
+    if (enabledTypes.has('company') && counterparty >= 3) {
+      for (const item of column.orgs) {
+        results.push({ type: 'company', value: item.value, start: item.start, end: item.start + item.value.length, hint: `按内容推断：${header}中的单位名称`, reviewRequired: !/公司|集团/u.test(item.value) });
+      }
+    }
+  }
   return results;
 }

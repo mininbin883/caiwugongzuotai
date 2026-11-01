@@ -226,6 +226,10 @@ function cellDisplayValue(cell) {
   if (!cell || cell.f) return null;
   if (cell.v === undefined || cell.v === null) return null;
   if (cell.t === 'd' && cell.v instanceof Date) return cell.v.toISOString();
+  // 部分财务软件导出的货币格式里，货币符号被写成了乱码（如“å52,500.00”）。数字格只保留正常的数字显示。
+  if (cell.t === 'n' && typeof cell.w === 'string' && /[\u00C0-\u024F]/u.test(cell.w)) {
+    return cell.w.replace(/[\u00C0-\u024F]+/gu, '').trim() || String(cell.v);
+  }
   return String(cell.w ?? cell.v);
 }
 

@@ -50,3 +50,22 @@ test('Office reversible mapping rejects duplicate or malformed tokens', () => {
   ]), /LOCAL_OFFICE_REVERSIBLE_MAPPING_INVALID/);
   assert.throws(() => normalizeReversibleMapping([{ token: '[TOKEN]', value: '张三' }]), /LOCAL_OFFICE_REVERSIBLE_MAPPING_INVALID/);
 });
+
+test('数字格里乱码的货币符号（如“å52,500.00”）在提取时去掉', async () => {
+  const XLSX = (await import('xlsx')).default;
+  const os = await import('node:os');
+  const pathModule = await import('node:path');
+  const fsModule = await import('node:fs/promises');
+  const { extractOfficeDocument } = (await import('../src/services/office-redaction-service.cjs')).default;
+  const sheet = XLSX.utils.aoa_to_sheet([['科目名称', '期初借方'], ['示例', 52500]]);
+  sheet.B2.z = '"å"#,##0.00';
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, sheet, '余额表');
+  const directory = await fsModule.mkdtemp(pathModule.join(os.tmpdir(), 'moyin-garbled-'));
+  const file = pathModule.join(directory, 'garbled.xlsx');
+  XLSX.writeFile(book, file);
+  const document = await extractOfficeDocument(file);
+  assert.ok(document.text.includes('52,500.00'));
+  assert.ok(!document.text.includes('å'));
+  await fsModule.rm(directory, { recursive: true, force: true });
+});

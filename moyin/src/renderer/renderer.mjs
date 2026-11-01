@@ -1130,7 +1130,17 @@ function renderSourceHighlight() {
   // 末尾补一个零宽字符，保证最后一行换行时高度一致。
   fragment.append(`${text.slice(cursor)}\u200b`);
   layer.replaceChildren(fragment);
+  alignHighlightWidth();
   syncHighlightScroll();
+}
+
+function alignHighlightWidth() {
+  // 兜底：若两层可用宽度仍有差异（字体缩放、系统滚动条设置等），按差值补齐右侧留白，保证换行位置一致。
+  const editor = elements.sourceEditor;
+  const layer = elements.sourceHighlight;
+  layer.style.paddingRight = '';
+  const diff = layer.clientWidth - editor.clientWidth;
+  if (diff) layer.style.paddingRight = `${parseFloat(getComputedStyle(layer).paddingRight) + diff}px`;
 }
 
 function syncHighlightScroll() {
@@ -1884,7 +1894,7 @@ elements.pdfPasswordDialog.addEventListener('cancel', (event) => {
 elements.resetButton.addEventListener('click', () => { if (confirmDiscardUnexported('清空')) reset(); });
 for (const eventName of ['select', 'mouseup', 'keyup']) elements.sourceEditor.addEventListener(eventName, updateSelectionBar);
 elements.sourceEditor.addEventListener('scroll', syncHighlightScroll);
-new ResizeObserver(() => syncHighlightScroll()).observe(elements.sourceEditor);
+new ResizeObserver(() => { alignHighlightWidth(); syncHighlightScroll(); }).observe(elements.sourceEditor);
 document.addEventListener('selectionchange', () => { if (document.activeElement === elements.sourceEditor) updateSelectionBar(); });
 elements.sourceEditor.addEventListener('keydown', (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && currentSelection()) {

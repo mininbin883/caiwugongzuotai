@@ -312,8 +312,12 @@ h1, h2, p { margin-top: 0; }
 .highlight-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
 /* 两层都固定显示纵向滚动条，保证文字排版宽度完全一致 */
 .editor-highlight, .editor-overlay { overflow-y: scroll; }
-.editor-highlight::-webkit-scrollbar { background: transparent; }
+/* 两层使用同一宽度的自定义滚动条：Windows 原生滚动条与自定义滚动条宽度不同，会让长行换行位置错开、高亮下移。 */
+.editor-highlight::-webkit-scrollbar, .editor-overlay::-webkit-scrollbar { width: 12px; height: 12px; }
 .editor-highlight::-webkit-scrollbar-thumb, .editor-highlight::-webkit-scrollbar-track { background: transparent; }
+.editor-overlay::-webkit-scrollbar-track { background: transparent; }
+.editor-overlay::-webkit-scrollbar-thumb { background: #cfcabd; border-radius: 6px; border: 3px solid transparent; background-clip: padding-box; }
+.editor-overlay::-webkit-scrollbar-thumb:hover { background-color: #b5af9f; }
 
 /* 导出栏与“接下来”卡片 */
 .export-more { position: relative; }
