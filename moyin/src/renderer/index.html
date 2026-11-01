@@ -49,9 +49,16 @@
           <ol id="moduleSideSteps" class="module-side-steps"></ol>
         </section>
 
-        <section class="side-section" data-module-section="redact protect">
+        <section id="settingsApplyBar" class="side-section settings-apply hidden" data-module-section="protect" aria-live="polite">
+          <strong id="settingsApplyText">有改动未应用</strong>
+          <small>改动在点“应用并重新识别”后生效，不会打乱正在核对的内容。</small>
+          <button id="settingsApplyButton" type="button" class="button button-dark button-small">应用并重新识别</button>
+        </section>
+
+        <section class="side-section" data-module-section="protect">
           <div class="section-kicker">识别范围</div>
-          <h2>敏感信息类型</h2>
+          <h2>找出这些信息</h2>
+          <p class="field-hint">关掉的类别不会换成代号，会原样保留在副本里。</p>
           <div id="typeList" class="type-list"></div>
         </section>
 
@@ -264,6 +271,7 @@
           <p class="empty-privacy">文件无需上传；原文件保持原样。</p>
         </div>
 
+        <div id="reviewSplit" class="review-split" data-redact-view>
         <div id="editorState" class="editor-state hidden" data-redact-view>
           <div id="imagePreview" class="image-preview hidden">
             <div class="image-preview-heading">
@@ -311,6 +319,43 @@
           </div>
           <textarea id="redactedEditor" class="document-editor hidden" spellcheck="false" readonly aria-label="脱敏预览"></textarea>
         </div>
+        <section id="findingsPanel" class="findings-panel hidden" data-redact-view>
+          <div class="findings-heading">
+            <div class="review-title">
+              <h2>要隐藏的信息</h2>
+              <p id="reviewSummary" class="review-summary">勾选 = 隐藏，不勾 = 原样保留</p>
+            </div>
+            <div class="review-tools">
+              <div id="reviewViewToggle" class="segmented review-view" role="tablist" aria-label="核对方式">
+                <button type="button" class="segment" data-review-view="column">按列</button>
+                <button type="button" class="segment" data-review-view="value">逐条</button>
+              </div>
+              <button id="reviewSettingsLink" type="button" class="link-button">已开启 <b id="reviewTypeCount">0</b> 类 · 保护设置 ↗</button>
+              <details class="export-more">
+              <summary>更多导出方式</summary>
+              <div class="export-actions">
+                <button id="exportJsonButton" class="button button-ghost button-small">导出审计 JSON</button>
+                <button id="exportOcrTextButton" class="button button-ghost button-small hidden">导出识别 TXT</button>
+                <button id="exportImageButton" class="button button-ghost button-small hidden">导出涂黑图片</button>
+                <button id="exportOfficeButton" class="button button-ghost button-small hidden">导出原格式文档</button>
+                <button id="exportCsvButton" class="button button-ghost button-small hidden">导出原格式 CSV</button>
+                <button id="exportTextButton" class="button button-ghost button-small">导出脱敏文本 TXT</button>
+              </div>
+            </details>
+            </div>
+          </div>
+          <div id="exportAuditBox" class="audit-box hidden" role="status" aria-live="polite"></div>
+          <div id="findingList" class="finding-list review-list"></div>
+          <div class="export-bar">
+            <div class="export-bar-text">
+              <strong id="exportSummary">0 处将换成代号</strong>
+              <small id="exportSummaryDetail">导出后副本存入文件仓库并得到编号</small>
+            </div>
+            <label class="export-confirm"><input id="exportConfirm" type="checkbox"> 我已核对要隐藏的信息</label>
+            <button id="exportPrimaryButton" class="button button-accent" disabled>确认并导出副本</button>
+          </div>
+        </section>
+        </div>
 
         <section id="restorePanel" class="restore-panel module-hidden">
           <div class="restore-heading">
@@ -354,35 +399,6 @@
           </div>
         </section>
 
-        <section id="findingsPanel" class="findings-panel hidden" data-redact-view>
-          <div class="findings-heading">
-            <div>
-              <div class="section-kicker">人工复核</div>
-              <h2>识别结果</h2>
-            </div>
-            <details class="export-more">
-              <summary>更多导出方式</summary>
-              <div class="export-actions">
-                <button id="exportJsonButton" class="button button-ghost button-small">导出审计 JSON</button>
-                <button id="exportOcrTextButton" class="button button-ghost button-small hidden">导出识别 TXT</button>
-                <button id="exportImageButton" class="button button-ghost button-small hidden">导出涂黑图片</button>
-                <button id="exportOfficeButton" class="button button-ghost button-small hidden">导出原格式文档</button>
-                <button id="exportCsvButton" class="button button-ghost button-small hidden">导出原格式 CSV</button>
-                <button id="exportTextButton" class="button button-ghost button-small">导出脱敏文本 TXT</button>
-              </div>
-            </details>
-          </div>
-          <div id="exportAuditBox" class="audit-box hidden" role="status" aria-live="polite"></div>
-          <div id="findingList" class="finding-list"></div>
-          <div class="export-bar">
-            <div class="export-bar-text">
-              <strong id="exportSummary">0 处将换成代号</strong>
-              <small id="exportSummaryDetail">导出后副本存入文件仓库并得到编号</small>
-            </div>
-            <label class="export-confirm"><input id="exportConfirm" type="checkbox"> 我已核对要隐藏的信息</label>
-            <button id="exportPrimaryButton" class="button button-accent" disabled>确认并导出副本</button>
-          </div>
-        </section>
       </section>
     </main>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

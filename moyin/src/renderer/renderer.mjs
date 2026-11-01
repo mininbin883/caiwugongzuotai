@@ -4,6 +4,7 @@ import { auditBeforeExport, auditItemToFinding } from '../core/export-audit.mjs'
 import { reviewRestoration, summarizeReview } from '../core/restore-review.mjs';
 import { friendlyError } from '../core/error-messages.mjs';
 import { buildAiPrompt } from '../core/ai-prompt.mjs';
+import { buildTableModel, groupByColumn, groupByType, wholeColumnFindings, createColumnLocator, findColumn, sourceLabel } from '../core/review-model.mjs';
 import { demoDocumentResult, workflowSteps } from '../core/workflow-demo.mjs';
 import { MODULE_DEFINITIONS, MODULE_IDS, moduleIdFromHash, nextModuleId, normalizeModuleId } from '../core/navigation-controller.mjs';
 import { autoVaultDecision, createPastedDocument } from '../core/quick-entry-controller.mjs';
@@ -22,6 +23,14 @@ const state = {
   unexported: false,
   lastExport: null,
   restoreFile: null,
+  reviewView: null,
+  columnPolicies: new Map(),
+  openGroups: new Set(),
+  valueLimits: new Map(),
+  locateCursor: new Map(),
+  tableModelCache: null,
+  pendingTypes: null,
+  settingsDirty: false,
   enabledTypes: new Set(Object.keys(TYPE_LABELS)),
   image: null,
   imageMappingValid: false,
@@ -76,6 +85,7 @@ const elements = Object.fromEntries([
   'vaultGateDialog', 'vaultGateCreate', 'vaultGateOpen', 'vaultGateCancel',
   'nextStepsDialog', 'nextStepsTitle', 'nextStepsPath', 'nextStepsPrompt', 'nextStepsCopy', 'nextStepsDownload',
   'nextStepsRestore', 'nextStepsNew', 'nextStepsClose',
+  'reviewSummary', 'reviewViewToggle', 'reviewSettingsLink', 'reviewTypeCount', 'settingsApplyBar', 'settingsApplyText', 'settingsApplyButton',
   'sourceEditorWrap', 'sourceHighlight', 'selectionBar', 'selectionHint', 'selectionActions', 'selectionPreview', 'selectionType',
   'selectionHideOnceButton', 'selectionHideAllButton', 'selectionKeepButton',
   'nerStatus', 'nerMeta', 'nerThreshold', 'nerSelectButton', 'nerClearButton', 'nerAnalyzeButton',
@@ -829,6 +839,41 @@ function renderOcrCorrections(page) {
   }
 }
 
+// ---------- 保护设置：改动先暂存，点“应用并重新识别”才生效 ----------
+function typesChanged() {
+  if (!state.pendingTypes) return 0;
+  let changed = 0;
+  for (const type of Object.keys(TYPE_LABELS)) if (state.pendingTypes.has(type) !== state.enabledTypes.has(type)) changed += 1;
+  return changed;
+}
+
+function markSettingsDirty() {
+  state.settingsDirty = true;
+  renderSettingsApply();
+}
+
+function renderSettingsApply() {
+  const typeChanges = typesChanged();
+  const dirty = state.settingsDirty && (typeChanges > 0 || state.termsDirty);
+  elements.settingsApplyBar.classList.toggle('hidden', !dirty);
+  if (!dirty) return;
+  const parts = [];
+  if (typeChanges) parts.push(`${typeChanges} 类开关`);
+  if (state.termsDirty) parts.push('词表');
+  elements.settingsApplyText.textContent = `${parts.join('、')}有改动未应用`;
+}
+
+function applySettings() {
+  if (state.pendingTypes) state.enabledTypes = new Set(state.pendingTypes);
+  state.pendingTypes = null;
+  state.settingsDirty = false;
+  state.termsDirty = false;
+  renderSettingsApply();
+  updateModuleBadges();
+  if (state.sourceText) runAnalysis(); else renderTypes();
+  showToast(state.sourceText ? '保护设置已应用，已重新识别' : '保护设置已应用，下次识别时生效');
+}
+
 function renderTypes() {
   elements.typeList.replaceChildren();
   for (const [type, label] of Object.entries(TYPE_LABELS)) {
@@ -836,11 +881,11 @@ function renderTypes() {
     row.className = 'type-row';
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
-    checkbox.checked = state.enabledTypes.has(type);
+    checkbox.checked = (state.pendingTypes || state.enabledTypes).has(type);
     checkbox.addEventListener('change', () => {
-      if (checkbox.checked) state.enabledTypes.add(type); else state.enabledTypes.delete(type);
-      updateModuleBadges();
-      runAnalysis();
+      state.pendingTypes ||= new Set(state.enabledTypes);
+      if (checkbox.checked) state.pendingTypes.add(type); else state.pendingTypes.delete(type);
+      markSettingsDirty();
     });
     const dot = document.createElement('span');
     dot.className = `type-dot type-${type}`;
@@ -854,60 +899,335 @@ function renderTypes() {
   updateModuleBadges();
 }
 
-function renderFindings() {
-  elements.findingList.replaceChildren();
-  if (!state.findings.length) {
-    const empty = document.createElement('div');
-    empty.className = 'no-findings';
-    empty.textContent = '当前规则没有发现敏感信息。可以补充自定义词或直接编辑原文。';
-    elements.findingList.append(empty);
+// ---------- 核对面板（按列 / 逐条） ----------
+function tableModel() {
+  if (state.tableModelCache?.text !== state.sourceText) {
+    state.tableModelCache = { text: state.sourceText, model: buildTableModel(state.sourceText) };
   }
-  for (const finding of state.findings) {
-    const row = document.createElement('div');
-    row.className = `finding-row ${finding.enabled ? '' : 'disabled'} ${finding.reviewRequired ? 'needs-review' : ''} ${finding.source === 'manual' ? 'manual' : ''}`;
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = finding.enabled;
-    checkbox.setAttribute('aria-label', `处理 ${finding.value}`);
-    checkbox.addEventListener('change', () => {
-      finding.enabled = checkbox.checked;
-      row.classList.toggle('disabled', !finding.enabled);
-      refreshPreview();
-    });
+  return state.tableModelCache.model;
+}
+
+function reviewTokenMap() {
+  if (state.style !== 'token') return null;
+  return new Map(reversiblePreview().assignments.map((item) => [`${item.start}:${item.end}`, item.token]));
+}
+
+function displayReplacement(finding, tokenMap) {
+  if (!finding.enabled) return '保留原文';
+  return tokenMap?.get(`${finding.start}:${finding.end}`) || finding.replacement;
+}
+
+function locateValue(group) {
+  const index = (state.locateCursor.get(group.key) || 0) % group.findings.length;
+  state.locateCursor.set(group.key, index + 1);
+  const finding = group.findings[index];
+  selectSourceRange(finding.start, finding.end);
+}
+
+function setFindingsEnabled(list, enabled) {
+  const model = tableModel();
+  const locate = model.tables.length ? createColumnLocator(model) : null;
+  for (const finding of list) {
+    finding.enabled = enabled;
+    // 在“整列保留”的列里手动勾选某个值时，这一列改回“自动”，避免下次识别又被取消。
+    if (enabled && locate) {
+      const key = locate(finding.start);
+      if (key && state.columnPolicies.get(key)?.mode === 'keep') state.columnPolicies.delete(key);
+    }
+  }
+  state.reversibleCache = null;
+  renderFindings();
+  refreshPreview();
+}
+
+function sourceBadges(group) {
+  const badges = [];
+  const sources = new Set(group.findings.map(sourceLabel));
+  for (const label of sources) {
+    if (label === '格内识别') continue;
     const badge = document.createElement('span');
-    badge.className = `finding-badge type-${finding.type}`;
-    badge.textContent = finding.source === 'onnx'
-      ? `${finding.label} · ${Math.round(Number(finding.confidence || 0) * 100)}%`
-      : finding.label;
-    if (finding.reviewRequired) badge.title = finding.source === 'onnx' ? '模型置信度低于自动采纳阈值，请人工复核后勾选' : '位置可能是词的一部分，请人工复核';
-    const value = document.createElement('code');
-    value.textContent = finding.value;
-    value.className = 'locatable';
-    value.title = '点击在原文中定位';
-    value.addEventListener('click', () => selectSourceRange(finding.start, finding.end));
-    const arrow = document.createElement('span');
-    arrow.className = 'finding-arrow';
-    arrow.textContent = '→';
-    const replacement = document.createElement('code');
-    replacement.className = 'replacement';
-    replacement.textContent = finding.replacement;
-    row.append(checkbox, badge, value, arrow, replacement);
-    if (finding.hint) {
-      const hint = document.createElement('span');
-      hint.className = 'finding-hint';
-      hint.textContent = finding.hint;
-      row.append(hint);
+    badge.className = 'badge-source';
+    badge.textContent = label;
+    badge.title = group.hint || label;
+    badges.push(badge);
+  }
+  if (group.reviewRequired) {
+    const badge = document.createElement('span');
+    badge.className = 'badge-review';
+    badge.textContent = '请确认';
+    badge.title = group.hint || '可能是词的一部分或推断结果，请核对';
+    badges.push(badge);
+  }
+  return badges;
+}
+
+function renderValueRow(group, tokenMap, { showType = true } = {}) {
+  const row = document.createElement('div');
+  const allEnabled = group.enabledCount === group.count;
+  row.className = `value-row finding-row ${group.enabledCount ? '' : 'disabled'} ${group.reviewRequired ? 'needs-review' : ''} ${group.manual ? 'manual' : ''}`;
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = group.enabledCount > 0;
+  checkbox.indeterminate = group.enabledCount > 0 && !allEnabled;
+  checkbox.setAttribute('aria-label', `隐藏 ${group.value}（${group.count} 处）`);
+  checkbox.addEventListener('change', () => setFindingsEnabled(group.findings, checkbox.checked));
+  const main = document.createElement('div');
+  main.className = 'value-main';
+  if (showType) {
+    const badge = document.createElement('span');
+    badge.className = `finding-badge type-${group.type}`;
+    badge.textContent = TYPE_LABELS[group.type] || group.label || group.type;
+    main.append(badge);
+  }
+  const value = document.createElement('span');
+  value.className = 'value-text';
+  value.textContent = group.value;
+  value.title = `${group.value}（点击在原文中定位，再点跳到下一处）`;
+  value.addEventListener('click', () => locateValue(group));
+  const arrow = document.createElement('span');
+  arrow.className = 'value-arrow';
+  arrow.textContent = '→';
+  const replacement = document.createElement('span');
+  replacement.className = 'value-replacement';
+  replacement.textContent = displayReplacement(group.findings.find((item) => item.enabled) || group.findings[0], tokenMap);
+  main.append(value, arrow, replacement, ...sourceBadges(group));
+  const side = document.createElement('div');
+  side.className = 'value-side';
+  const count = document.createElement('span');
+  count.className = 'value-count';
+  count.textContent = `${group.count} 处`;
+  count.title = '点击依次定位每一处';
+  count.addEventListener('click', () => locateValue(group));
+  side.append(count);
+  if (group.manual) {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'mini-button';
+    remove.textContent = '移除';
+    remove.title = '撤销手动补选';
+    remove.addEventListener('click', () => {
+      for (const finding of group.findings.filter((item) => item.source === 'manual')) removeManualFinding(finding, { quiet: true });
+      runAnalysis();
+    });
+    side.append(remove);
+  }
+  row.append(checkbox, main, side);
+  return row;
+}
+
+function renderValueList(container, key, values, tokenMap, options) {
+  const limit = state.valueLimits.get(key) || 30;
+  for (const group of values.slice(0, limit)) container.append(renderValueRow(group, tokenMap, options));
+  if (values.length > limit) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'show-more';
+    more.textContent = `再显示 ${Math.min(100, values.length - limit)} 个（共 ${values.length} 个值）`;
+    more.addEventListener('click', () => {
+      state.valueLimits.set(key, limit + 100);
+      renderFindings();
+    });
+    container.append(more);
+  }
+}
+
+function makeGroupDetails(key, className, defaultOpen = false) {
+  const details = document.createElement('details');
+  details.className = className;
+  details.open = state.openGroups.has(key) || (defaultOpen && !state.openGroups.has(`closed:${key}`));
+  details.addEventListener('toggle', () => {
+    if (details.open) { state.openGroups.add(key); state.openGroups.delete(`closed:${key}`); }
+    else { state.openGroups.delete(key); state.openGroups.add(`closed:${key}`); }
+    if (details.open && details.dataset.lazy === '1') renderFindings();
+  });
+  return details;
+}
+
+function columnPolicySelect(column) {
+  const select = document.createElement('select');
+  select.setAttribute('aria-label', `${column.letter} 列的处理方式`);
+  const policy = state.columnPolicies.get(column.key) || { mode: 'auto' };
+  const options = [['auto', '只隐藏格内识别到的部分（自动）']];
+  for (const [type, label] of Object.entries(TYPE_LABELS)) options.push([`hide:${type}`, `整列隐藏，算作「${label}」`]);
+  options.push(['keep', '整列保留（都不隐藏）']);
+  for (const [value, label] of options) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.append(option);
+  }
+  select.value = policy.mode === 'hide' ? `hide:${policy.type}` : policy.mode;
+  select.addEventListener('click', (event) => event.stopPropagation());
+  select.addEventListener('change', () => {
+    const value = select.value;
+    if (value === 'auto') state.columnPolicies.delete(column.key);
+    else if (value === 'keep') state.columnPolicies.set(column.key, { mode: 'keep' });
+    else state.columnPolicies.set(column.key, { mode: 'hide', type: value.slice(5) });
+    runAnalysis();
+    const label = value === 'auto' ? '自动' : value === 'keep' ? '整列保留' : '整列隐藏';
+    showToast(`${column.letter} 列已设为“${label}”`);
+  });
+  return select;
+}
+
+function renderColumnCard(column, tokenMap) {
+  const policy = state.columnPolicies.get(column.key);
+  const empty = !column.count && !policy;
+  const details = makeGroupDetails(column.key, `column-card ${empty ? 'empty' : ''}`);
+  const summary = document.createElement('summary');
+  const name = document.createElement('span');
+  name.className = 'column-name';
+  const letter = document.createElement('span');
+  letter.className = 'letter';
+  letter.textContent = `${column.letter} 列`;
+  name.append(letter, column.header || '（无表头）');
+  const meta = document.createElement('span');
+  meta.className = 'column-meta';
+  if (!column.count) {
+    meta.textContent = policy?.mode === 'keep' ? '整列保留' : `没有要隐藏的内容 · ${column.cellCount} 格`;
+  } else {
+    const state_ = column.enabledCount === column.count ? '都隐藏' : column.enabledCount ? `${column.enabledCount} 处隐藏` : '都保留';
+    const typeNames = column.types.map((type) => TYPE_LABELS[type] || type).join('、');
+    meta.textContent = `${column.count} 处${state_} · ${column.values.length} 个值 · ${typeNames}${policy?.mode === 'hide' ? ' · 整列隐藏' : ''}`;
+  }
+  const actions = document.createElement('span');
+  actions.className = 'column-actions';
+  if (column.reviewRequired) {
+    const badge = document.createElement('span');
+    badge.className = 'badge-review';
+    badge.textContent = '请确认';
+    actions.append(badge);
+  }
+  if (column.count) {
+    for (const [label, enabled] of [['全部隐藏', true], ['全部保留', false]]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'mini-button';
+      button.textContent = label;
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setFindingsEnabled(column.findings, enabled);
+      });
+      actions.append(button);
     }
-    if (finding.source === 'manual') {
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'mini-button';
-      remove.textContent = '移除';
-      remove.title = '撤销这一处手动补选';
-      remove.addEventListener('click', () => removeManualFinding(finding));
-      row.append(remove);
+  }
+  summary.append(name, actions, meta);
+  details.append(summary);
+  if (!details.open) {
+    details.dataset.lazy = '1';
+    return details;
+  }
+  const body = document.createElement('div');
+  body.className = 'column-body';
+  const policyRow = document.createElement('label');
+  policyRow.className = 'column-policy';
+  const sources = column.sources.filter((item) => item !== '格内识别');
+  policyRow.append(`处理方式${sources.length ? `（${sources.join('、')}）` : ''}：`, columnPolicySelect(column));
+  body.append(policyRow);
+  if (column.values.length) {
+    const preview = document.createElement('div');
+    preview.className = 'preview-pairs';
+    for (const group of column.values.slice(0, 3)) {
+      const pair = document.createElement('span');
+      const code = document.createElement('code');
+      code.textContent = displayReplacement(group.findings.find((item) => item.enabled) || group.findings[0], tokenMap);
+      pair.append(`${group.value} → `, code);
+      preview.append(pair);
     }
-    elements.findingList.append(row);
+    body.append(preview);
+    renderValueList(body, column.key, column.values, tokenMap, { showType: column.types.length > 1 });
+  } else {
+    const hint = document.createElement('div');
+    hint.className = 'column-meta';
+    hint.textContent = '这一列没有识别到要隐藏的内容。如果整列都是编号、车次、车牌等身份线索，可以选“整列隐藏”。';
+    body.append(hint);
+  }
+  details.append(body);
+  return details;
+}
+
+function renderFindings() {
+  const list = elements.findingList;
+  list.replaceChildren();
+  const findings = state.findings;
+  const model = tableModel();
+  const hasTables = model.tables.length > 0;
+  if (!state.reviewView || (state.reviewView === 'column' && !hasTables)) state.reviewView = hasTables ? 'column' : 'value';
+  for (const button of elements.reviewViewToggle.querySelectorAll('[data-review-view]')) {
+    button.classList.toggle('active', button.dataset.reviewView === state.reviewView);
+    button.disabled = button.dataset.reviewView === 'column' && !hasTables;
+    button.title = button.disabled ? '这份文档没有表格，按列不可用' : '';
+  }
+  const typeCount = new Set(findings.map((item) => item.type)).size;
+  const reviewCount = findings.filter((item) => item.reviewRequired).length;
+  elements.reviewSummary.textContent = `找到 ${findings.length.toLocaleString('zh-CN')} 处 · ${typeCount} 类${reviewCount ? ` · ${reviewCount} 处请确认` : ''} · 勾选 = 隐藏，不勾 = 原样保留`;
+  elements.reviewTypeCount.textContent = String(state.enabledTypes.size);
+  if (!findings.length && !hasTables) {
+    const empty = document.createElement('div');
+    empty.className = 'review-empty';
+    empty.textContent = '当前规则没有发现要隐藏的信息。可以在左侧原文中选中文字手动补选，或到“保护设置”补充要隐藏的词。';
+    list.append(empty);
+    return;
+  }
+  const tokenMap = reviewTokenMap();
+  if (state.reviewView === 'column') {
+    const grouped = groupByColumn(model, findings);
+    for (const sheet of grouped.sheets) {
+      const group = document.createElement('div');
+      group.className = 'review-group';
+      const title = document.createElement('div');
+      title.className = 'review-group-title';
+      const small = document.createElement('small');
+      small.textContent = `${sheet.total.toLocaleString('zh-CN')} 处 · ${sheet.columns.length} 列`;
+      title.append(sheet.sheet || '表格', small);
+      group.append(title);
+      for (const column of sheet.columns) group.append(renderColumnCard(column, tokenMap));
+      list.append(group);
+    }
+    if (grouped.outsideCount) {
+      const group = document.createElement('div');
+      group.className = 'review-group';
+      const title = document.createElement('div');
+      title.className = 'review-group-title';
+      const small = document.createElement('small');
+      small.textContent = `${grouped.outsideCount} 处 · ${grouped.outside.length} 个值`;
+      title.append('表格以外的内容', small);
+      group.append(title);
+      renderValueList(group, 'outside', grouped.outside, tokenMap, { showType: true });
+      list.append(group);
+    }
+    return;
+  }
+  for (const typeGroup of groupByType(findings, TYPE_LABELS)) {
+    const key = `type:${typeGroup.type}`;
+    const details = makeGroupDetails(key, 'column-card', true);
+    const summary = document.createElement('summary');
+    const name = document.createElement('span');
+    name.className = 'column-name';
+    name.textContent = typeGroup.label;
+    const actions = document.createElement('span');
+    actions.className = 'column-actions';
+    if (typeGroup.reviewCount) {
+      const badge = document.createElement('span');
+      badge.className = 'badge-review';
+      badge.textContent = `${typeGroup.reviewCount} 处请确认`;
+      actions.append(badge);
+    }
+    const meta = document.createElement('span');
+    meta.className = 'column-meta';
+    meta.textContent = `${typeGroup.count} 处 · ${typeGroup.values.length} 个值 · ${typeGroup.enabledCount === typeGroup.count ? '都隐藏' : `${typeGroup.enabledCount} 处隐藏`}`;
+    summary.append(name, actions, meta);
+    details.append(summary);
+    if (details.open) {
+      const body = document.createElement('div');
+      body.className = 'column-body';
+      renderValueList(body, key, typeGroup.values, tokenMap, { showType: false });
+      details.append(body);
+    } else {
+      details.dataset.lazy = '1';
+    }
+    list.append(details);
   }
 }
 
@@ -1097,9 +1417,16 @@ function keepSelection() {
   showToast(`“${selection.value}”已设为不隐藏（加入左侧总是保留词）`);
 }
 
-function removeManualFinding(finding) {
+function removeManualFinding(finding, { quiet = false } = {}) {
   state.manualFindings = state.manualFindings.filter((item) =>
     !(item.sourceText === state.sourceText && item.start === finding.start && item.end === finding.end));
+  // 整列隐藏产生的项：撤销时把这一列改回自动。
+  if (String(finding.hint || '').startsWith('整列隐藏')) {
+    const model = tableModel();
+    const key = model.tables.length ? createColumnLocator(model)(finding.start) : null;
+    if (key) state.columnPolicies.delete(key);
+  }
+  if (quiet) return;
   runAnalysis();
   showToast('已撤销这一处手动补选');
 }
@@ -1193,6 +1520,28 @@ function refreshPreview() {
   if (state.csv) elements.exportCsvButton.textContent = state.style === 'token' ? '导出可逆代号 CSV' : '导出原格式 CSV';
 }
 
+function columnPolicyFindings() {
+  if (!state.columnPolicies.size) return [];
+  const model = tableModel();
+  const extra = [];
+  for (const [key, policy] of state.columnPolicies) {
+    if (policy.mode !== 'hide') continue;
+    const column = findColumn(model, key);
+    if (column) extra.push(...wholeColumnFindings(column, policy.type));
+  }
+  return extra;
+}
+
+function applyKeepColumns() {
+  const keep = [...state.columnPolicies].filter(([, policy]) => policy.mode === 'keep').map(([key]) => key);
+  if (!keep.length) return;
+  const locate = createColumnLocator(tableModel());
+  const keys = new Set(keep);
+  for (const finding of state.findings) {
+    if (finding.source !== 'manual' && keys.has(locate(finding.start))) finding.enabled = false;
+  }
+}
+
 function runAnalysis() {
   const previousEnabled = new Map(state.findings.map((item) => [`${item.type}:${item.start}:${item.end}`, item.enabled]));
   const result = analyzeText(state.sourceText, {
@@ -1203,13 +1552,15 @@ function runAnalysis() {
     alwaysKeepTerms: alwaysKeepTerms(),
     externalFindings: [
       ...(state.nerText === state.sourceText ? state.nerFindings : []),
-      ...state.manualFindings.filter((item) => item.sourceText === state.sourceText)
+      ...state.manualFindings.filter((item) => item.sourceText === state.sourceText),
+      ...columnPolicyFindings()
     ]
   });
   state.findings = result.findings.map((item) => ({
     ...item,
     enabled: previousEnabled.get(`${item.type}:${item.start}:${item.end}`) ?? item.enabled
   }));
+  applyKeepColumns();
   elements.sourceEditor.value = state.sourceText;
   renderFindings();
   refreshPreview();
@@ -1233,6 +1584,12 @@ function applyDocumentResult(result, message = '文档已在本机解析完成')
   state.reversibleNonce = createTokenNonce();
   state.reversibleCache = null;
   state.manualFindings = [];
+  state.columnPolicies = new Map();
+  state.openGroups = new Set();
+  state.valueLimits = new Map();
+  state.locateCursor = new Map();
+  state.reviewView = null;
+  document.body.classList.add('has-document');
   state.unexported = true;
   state.lastExport = null;
   if (elements.exportConfirm) elements.exportConfirm.checked = false;
@@ -1459,6 +1816,8 @@ function reset() {
   state.restoreResult = null;
   state.unexported = false;
   state.manualFindings = [];
+  state.columnPolicies = new Map();
+  document.body.classList.remove('has-document');
   setActiveModule('redact');
   renderWorkflowProgress('import');
   clearNerFindings();
@@ -1931,9 +2290,18 @@ elements.sourceEditor.addEventListener('input', () => {
   elements.charCount.textContent = state.sourceText.length.toLocaleString('zh-CN');
   runAnalysis();
 });
-elements.customTerms.addEventListener('input', runAnalysis);
-elements.typedTerms.addEventListener('input', runAnalysis);
-elements.alwaysKeepTerms.addEventListener('input', runAnalysis);
+for (const textarea of [elements.customTerms, elements.typedTerms, elements.alwaysKeepTerms]) {
+  textarea.addEventListener('input', () => { state.termsDirty = true; markSettingsDirty(); });
+}
+elements.settingsApplyButton.addEventListener('click', applySettings);
+elements.reviewSettingsLink.addEventListener('click', () => setActiveModule('protect'));
+for (const button of elements.reviewViewToggle.querySelectorAll('[data-review-view]')) {
+  button.addEventListener('click', () => {
+    if (button.disabled) return;
+    state.reviewView = button.dataset.reviewView;
+    renderFindings();
+  });
+}
 elements.nerSelectButton.addEventListener('click', async () => {
   try {
     state.nerBusy = true;

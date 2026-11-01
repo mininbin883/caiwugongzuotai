@@ -203,7 +203,7 @@ function normalizeExternalFindings(text, values, enabledTypes) {
       start,
       end,
       source: manual ? 'manual' : item?.source === 'onnx' ? 'onnx' : 'external',
-      ...(manual ? { hint: '手动补选' } : {}),
+      ...(manual ? { hint: typeof item?.hint === 'string' && item.hint ? item.hint.slice(0, 60) : '手动补选' } : {}),
       confidence,
       reviewRequired: Boolean(item?.reviewRequired),
       enabled: item?.enabled !== false

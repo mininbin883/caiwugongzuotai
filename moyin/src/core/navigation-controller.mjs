@@ -43,8 +43,8 @@ export const MODULE_DEFINITIONS = Object.freeze({
     label: '保护设置',
     kicker: '识别与处理策略',
     title: '在一个地方管理所有识别规则',
-    description: '配置敏感类型、自定义词、保留词、离线 NER、OCR 引擎和默认脱敏方式；设置会立即作用于当前文档。',
-    status: '本机即时生效',
+    description: '选择要找出的信息类型，补充要隐藏或要保留的词，配置离线 NER、OCR 引擎和导出方式。改动点“应用并重新识别”后生效，不会打乱正在核对的内容。',
+    status: '改动需点“应用”',
     action: '定位到自定义词',
     checklist: Object.freeze(['选择敏感信息类型和脱敏方式', '补充自定义词、类型化词与保留词', '确认离线 NER 与 OCR 引擎状态'])
   })
