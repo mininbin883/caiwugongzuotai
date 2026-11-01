@@ -83,19 +83,40 @@ function activeFindings(findings) {
 }
 
 function normalizeReversibleMapping(mapping) {
-  if (!Array.isArray(mapping) || !mapping.length || mapping.length > 10000) throw new Error('LOCAL_OFFICE_REVERSIBLE_MAPPING_INVALID');
+  if (!Array.isArray(mapping) || !mapping.length || mapping.length > 100000) throw new Error('LOCAL_OFFICE_REVERSIBLE_MAPPING_INVALID');
   const seen = new Set();
   return mapping.map((entry) => {
     const token = String(entry?.token || '');
     const value = String(entry?.value ?? '');
     const occurrences = Number(entry?.occurrences || 1);
-    if (!REVERSIBLE_TOKEN_PATTERN.test(token) || seen.has(token) || !value || value.length > 100000 ||
+    const pseudonym = entry?.form === 'pseudonym';
+    const tokenValid = pseudonym ? token.length >= 2 && token.length <= 120 : REVERSIBLE_TOKEN_PATTERN.test(token);
+    if (!tokenValid || seen.has(token) || !value || value.length > 100000 ||
       !Number.isSafeInteger(occurrences) || occurrences < 1 || occurrences > 100000) {
       throw new Error('LOCAL_OFFICE_REVERSIBLE_MAPPING_INVALID');
     }
     seen.add(token);
-    return { token, value, occurrences, type: String(entry?.type || 'custom'), label: String(entry?.label || entry?.type || '自定义') };
+    return { token, value, occurrences, type: String(entry?.type || 'custom'), label: String(entry?.label || entry?.type || '自定义'), form: pseudonym ? 'pseudonym' : 'token' };
   });
+}
+
+// 假名的查找正则：从长到短；数字字母开头结尾的要求两侧不紧挨字母数字；单位的 Q 编号单独出现时也换回全称。
+function pseudonymPattern(entries) {
+  const byToken = new Map();
+  for (const entry of entries) if (entry.form === 'pseudonym') byToken.set(entry.token, entry);
+  for (const entry of entries) {
+    if (entry.form !== 'pseudonym' || entry.type !== 'company') continue;
+    const code = entry.token.match(/Q\d{3,}/u)?.[0];
+    if (code && !byToken.has(code)) byToken.set(code, entry);
+  }
+  if (!byToken.size) return null;
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const source = [...byToken.keys()].sort((left, right) => right.length - left.length).map((token) => {
+    const before = /^[0-9A-Za-z]/u.test(token) ? '(?<![0-9A-Za-z])' : '';
+    const after = /[0-9A-Za-z]$/u.test(token) ? '(?![0-9A-Za-z])' : '';
+    return `${before}${escape(token)}${after}`;
+  }).join('|');
+  return { regex: new RegExp(source, 'gu'), byToken };
 }
 
 function officeTokenFindings(text, mapping) {
@@ -122,6 +143,34 @@ function officeTokenFindings(text, mapping) {
       replacement: entry.value,
       enabled: true
     });
+  }
+  const pseudo = pseudonymPattern(entries);
+  // 批次副本的文件名（MI-000200-01-名称-脱敏副本.xlsx）换回原文件名；名称中的代号、假名一并换回。
+  const restoreInline = (value) => {
+    let output = value.replace(REVERSIBLE_TOKEN_SCAN, (token) => byToken.get(token)?.value ?? token);
+    if (pseudo) output = output.replace(pseudo.regex, (match) => pseudo.byToken.get(match)?.value ?? match);
+    return output;
+  };
+  const copyNames = [];
+  for (const match of source.matchAll(/MI-\d{6}-\d{2,3}-([^\s\t\n|]+?)-脱敏副本(?=\.[A-Za-z0-9]{2,5}\b)/gu)) {
+    copyNames.push({ type: 'custom', label: '文件名', value: match[0], start: match.index, end: match.index + match[0].length, replacement: restoreInline(match[1]), enabled: true });
+  }
+  if (copyNames.length) {
+    const inside = (item) => copyNames.some((name) => item.start < name.end && name.start < item.end);
+    for (let index = findings.length - 1; index >= 0; index -= 1) if (inside(findings[index])) findings.splice(index, 1);
+    findings.push(...copyNames);
+  }
+  if (pseudo) {
+    const covered = findings.map((item) => [item.start, item.end]);
+    for (const match of source.matchAll(pseudo.regex)) {
+      const start = match.index;
+      const end = start + match[0].length;
+      if (covered.some(([from, to]) => start < to && from < end)) continue;
+      const entry = pseudo.byToken.get(match[0]);
+      actualCounts.set(entry.token, (actualCounts.get(entry.token) || 0) + 1);
+      findings.push({ type: entry.type, label: entry.label, value: match[0], start, end, replacement: entry.value, enabled: true });
+    }
+    findings.sort((left, right) => left.start - right.start);
   }
   const missingTokens = entries.filter((entry) => !actualCounts.has(entry.token)).map((entry) => entry.token);
   const repeatedTokens = entries

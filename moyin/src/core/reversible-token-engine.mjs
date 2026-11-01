@@ -1,5 +1,7 @@
+import { restorePseudonyms } from './pseudonym-engine.mjs';
 const TOKEN_PATTERN = /^\[MI_[A-F0-9]{8}_[0-9A-Z]{3,6}\]$/u;
 const TOKEN_SCAN_PATTERN = /\[MI_[A-F0-9]{8}_[0-9A-Z]{3,6}\]/gu;
+export const COPY_NAME_PATTERN = /MI-\d{6}-\d{2,3}-([^\s\t\n|]+?)-脱敏副本(?=\.[A-Za-z0-9]{2,5}\b)/gu;
 
 export function createTokenNonce() {
   const bytes = new Uint8Array(4);
@@ -93,7 +95,10 @@ export function restoreTokens(input, mapping, options = {}) {
   for (const match of source.matchAll(TOKEN_SCAN_PATTERN)) counts.set(match[0], (counts.get(match[0]) || 0) + 1);
 
   let restoredCount = 0;
+  // 税务筛查模式的假名（form: 'pseudonym'）按字面换回；方括号代号照原逻辑处理。
+  const pseudonymEntries = entries.filter((entry) => entry?.form === 'pseudonym');
   for (const entry of entries) {
+    if (entry?.form === 'pseudonym') continue;
     const token = String(entry?.token || '');
     const value = String(entry?.value ?? '');
     if (!TOKEN_PATTERN.test(token) || known.has(token)) throw new Error('REVERSIBLE_MAPPING_INVALID');
@@ -103,7 +108,17 @@ export function restoreTokens(input, mapping, options = {}) {
     if (count > Number(entry.occurrences || 1)) repeated.push({ token, expected: Number(entry.occurrences || 1), actual: count });
     restoredCount += count;
   }
-  const restoredText = source.replace(TOKEN_SCAN_PATTERN, (token) => (known.has(token) ? known.get(token) : token));
+  // 批次副本的文件名（MI-000200-01-名称-脱敏副本.xlsx）换回原文件名；名称里的代号、假名随后一并换回。
+  let restoredText = source.replace(COPY_NAME_PATTERN, (_match, stem) => stem);
+  restoredText = restoredText.replace(TOKEN_SCAN_PATTERN, (token) => (known.has(token) ? known.get(token) : token));
+  if (pseudonymEntries.length) {
+    const pseudo = restorePseudonyms(restoredText, pseudonymEntries);
+    restoredText = pseudo.text;
+    restoredCount += pseudo.count;
+    for (const entry of pseudonymEntries) {
+      if (!pseudo.counts.get(entry.token)) missing.push({ token: entry.token, type: String(entry.type || 'custom'), label: String(entry.label || entry.type || '自定义') });
+    }
+  }
 
   const unknownTokens = [...new Set(source.match(TOKEN_SCAN_PATTERN) || [])].filter((token) => !known.has(token));
   const requiresReview = unknownTokens.length > 0 || (mode === 'rewrite' && missing.length > 0);

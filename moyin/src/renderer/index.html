@@ -250,11 +250,15 @@
                 <input id="batchAutoVault" type="checkbox" disabled>
                 <span>导出后自动入库</span>
               </label>
+              <select id="batchMode" class="batch-mode" aria-label="批次导出方式">
+                <option value="standard">标准：全部换成代号</option>
+                <option value="screening">税务筛查：保留类别特征</option>
+              </select>
               <button id="batchExportButton" class="button button-dark button-small" disabled>导出为一个批次</button>
               <button id="batchClearButton" class="button button-ghost button-small">清理已完成</button>
             </div>
           </div>
-          <p id="batchModeHint" class="batch-mode-hint">导出为一个批次：整批共用一套代号（同一家公司、同一个人在所有文件里是同一个代号），整批只存一条仓库记录、一个编号。AI 基于这批文件写的报告，逆脱敏时选这一个编号即可。</p>
+          <p id="batchModeHint" class="batch-mode-hint"></p>
           <div id="batchList" class="batch-list"></div>
         </section>
 
@@ -378,8 +382,9 @@
             <div id="restoreSearchResults" class="restore-search-results"></div>
           </div>
           <div id="restoreDrop" class="restore-drop">
-            <span>把 AI 返回的文件拖到这里（Word / Excel / CSV / PDF / TXT），或</span>
+            <span>把 AI 返回的文件或整个文件夹（如“筛查结果”）拖到这里，或</span>
             <button id="restoreImportButton" type="button" class="button button-dark button-small">导入 AI 返回的文件</button>
+            <button id="restoreFolderButton" type="button" class="button button-ghost button-small" title="例如税务筛查技能生成的“筛查结果”文件夹：报告、台账一次换回">还原整个文件夹</button>
             <span id="restoreFileState" class="restore-file-state"></span>
           </div>
           <div class="restore-grid">

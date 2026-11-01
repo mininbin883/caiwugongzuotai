@@ -3,8 +3,14 @@
 const path = require('node:path');
 
 // 批次可逆模式第一步：整批统一识别并分配代号（同一对象全批同一个代号），文件名中的敏感词也换成代号。
-function prepareReversibleBatch(jobs, analysisOptions, engine, reversible) {
-  const tokenizer = reversible.createSharedTokenizer();
+function prepareReversibleBatch(jobs, analysisOptions, engine, reversible, options = {}) {
+  // 税务筛查模式：人名、单位、税号、证件号、地址、号码换成保留类别特征的假名，其余仍用方括号代号。
+  const tokenizer = options.screening && options.pseudonym
+    ? options.pseudonym.createPseudonymTokenizer({
+      reservedText: jobs.map((job) => `${job.result.name || ''}\n${job.result.text || ''}`).join('\n'),
+      tokenizer: reversible.createSharedTokenizer()
+    })
+    : reversible.createSharedTokenizer();
   const prepared = new Map();
   const safeJobs = [];
   const sections = [];
@@ -59,6 +65,24 @@ function batchAiPrompt(fileNumber, fileCount, mapping) {
 
 const MIN_TERM_LENGTH = { person: 3, company: 4, address: 6, custom: 4 };
 
+function screeningAiPrompt(fileNumber, fileCount, mapping) {
+  const people = mapping.filter((entry) => entry.type === 'person').length;
+  const companies = mapping.filter((entry) => entry.type === 'company').length;
+  return [
+    `我会给你一个文件夹，里面是同一家建筑企业的 ${fileCount} 份财务资料（科目余额表、发票导出、序时账等），已在本机脱敏，批次编号「${fileNumber}」。`,
+    '请对这个文件夹运行“建筑业税务风险筛查”（construction-tax-risk）技能，按技能说明完成筛查并讲解报告。',
+    '',
+    '关于脱敏，请注意：',
+    `1. 人名换成了三个字的假名（如“张甲子”，共 ${people} 个），单位名称只把字号换成了 Q 编号（如“潍坊市Q007工程建设有限公司”，共 ${companies} 个），统一社会信用代码、身份证号的后几位、银行账号、电话、详细地址也换成了假号。地区、行业、组织形式、税号前 8 位和金额、日期、摘要都是真实的，筛查规则可以照常判断。`,
+    '2. 同一个假名在所有文件里都指同一个对象，可以跨文件、跨年度对比。',
+    '3. 报告和讲解里请原样使用这些假名和编号，不要猜测真实身份，也不要把假名改写成别的称呼。',
+    '4. 资料文件夹里只有资料本身；如果文件读取情况里有“未识别”的文件，照技能说明处理。',
+    '',
+    '我的其他要求：',
+    '（可选。提到公司和人时请用假名。）'
+  ].join('\n');
+}
+
 function collectBatchTerms(jobs, analysisOptions, engine) {
   const terms = new Map();
   for (const job of jobs) {
@@ -82,4 +106,4 @@ function mergeTypedTerms(analysisOptions, batchTerms) {
   return { ...analysisOptions, typedTerms };
 }
 
-module.exports = { prepareReversibleBatch, batchAiPrompt };
+module.exports = { prepareReversibleBatch, batchAiPrompt, screeningAiPrompt };

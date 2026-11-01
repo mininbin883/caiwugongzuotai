@@ -93,13 +93,18 @@ function sanitizeEntryFields(entry) {
     const type = String(item?.type || 'custom').slice(0, 80);
     const label = String(item?.label || type).slice(0, 80);
     const occurrences = Number(item?.occurrences);
-    if (!/^\[MI_[A-F0-9]{8}_[0-9A-Z]{3,6}\]$/u.test(token) || !value || Buffer.byteLength(value, 'utf8') > 65536 ||
+    // 税务筛查模式的假名：2–120 个字符、不含控制字符和换行。
+    const pseudonym = item?.form === 'pseudonym';
+    const tokenValid = pseudonym
+      ? token.length >= 2 && token.length <= 120 && !/[\u0000-\u001f]/u.test(token)
+      : /^\[MI_[A-F0-9]{8}_[0-9A-Z]{3,6}\]$/u.test(token);
+    if (!tokenValid || !value || Buffer.byteLength(value, 'utf8') > 65536 ||
         !Number.isInteger(occurrences) || occurrences < 1 || occurrences > 100000) {
       throw new Error('LOCAL_VAULT_MAPPING_INVALID');
     }
-    return { token, value, type, label, occurrences };
+    return pseudonym ? { token, value, type, label, occurrences, form: 'pseudonym' } : { token, value, type, label, occurrences };
   }) : [];
-  if (kind === 'reversible-map' && (!mapping.length || mapping.length > 10000 || new Set(mapping.map((item) => item.token)).size !== mapping.length)) {
+  if (kind === 'reversible-map' && (!mapping.length || mapping.length > 100000 || new Set(mapping.map((item) => item.token)).size !== mapping.length)) {
     throw new Error('LOCAL_VAULT_MAPPING_INVALID');
   }
   const audit = {

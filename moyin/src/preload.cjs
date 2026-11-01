@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('veilforge', Object.freeze({
   restoreOffice: (mapping, sentText) => ipcRenderer.invoke('veilforge:office-restore', { mapping, sentText }),
   openReturnedDocument: (file) => ipcRenderer.invoke('veilforge:restore-open', { path: file ? webUtils.getPathForFile(file) : '' }),
   saveRestoredDocument: (payload) => ipcRenderer.invoke('veilforge:restore-save', payload),
+  pickReturnedFolder: () => ipcRenderer.invoke('veilforge:restore-folder-pick'),
+  runFolderRestore: (token, mapping) => ipcRenderer.invoke('veilforge:restore-folder-run', { token, mapping }),
   createVault: (password) => ipcRenderer.invoke('veilforge:vault-create', { password }),
   openVault: (password) => ipcRenderer.invoke('veilforge:vault-open', { password }),
   saveVaultEntry: (payload) => ipcRenderer.invoke('veilforge:vault-save', payload),

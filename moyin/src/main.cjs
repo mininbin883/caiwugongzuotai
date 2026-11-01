@@ -41,7 +41,8 @@ const { runVaultV3CapacityScenario } = require('./services/vault-v3-capacity-smo
 const { runVaultV3MaintenanceScenario } = require('./services/vault-v3-maintenance-smoke.cjs');
 const { outputFileName, exportBatchResults } = require('./services/batch-export-service.cjs');
 const { saveBatchRecordsToVault } = require('./services/batch-vault-service.cjs');
-const { prepareReversibleBatch, batchAiPrompt } = require('./services/batch-reversible-service.cjs');
+const { prepareReversibleBatch, batchAiPrompt, screeningAiPrompt } = require('./services/batch-reversible-service.cjs');
+const { listRestorableFiles, restoreFolderFiles } = require('./services/restore-folder-service.cjs');
 const { loadNerModel } = require('./services/ner-service.cjs');
 const { findFirstModelPack } = require('./services/model-pack-service.cjs');
 const { inspectRapidOcrBackend } = require('./services/rapidocr-service.cjs');
@@ -901,6 +902,12 @@ function loadRedactionEngine() {
   return redactionEnginePromise;
 }
 
+let pseudonymEnginePromise;
+function loadPseudonymEngine() {
+  pseudonymEnginePromise ||= import('./core/pseudonym-engine.mjs');
+  return pseudonymEnginePromise;
+}
+
 let restoreReviewEnginePromise;
 function loadRestoreReviewEngine() {
   restoreReviewEnginePromise ||= import('./core/restore-review.mjs');
@@ -966,7 +973,12 @@ async function exportCompletedBatch(event, payload) {
   if (batchExportSessions.has(event.sender.id)) throw new Error('LOCAL_BATCH_EXPORT_ACTIVE');
   const jobs = batchQueue.list((job) => job.metadata.ownerId === event.sender.id && job.status === 'done' && job.result);
   if (!jobs.length) throw new Error('LOCAL_BATCH_EXPORT_EMPTY');
-  const reversibleBatch = payload?.reversible === true;
+  const screening = payload?.screening === true;
+  const reversibleBatch = payload?.reversible === true || screening;
+  // 税务筛查模式只导出筛查脚本读取的表格（Excel、CSV）；Word、PDF、图片脚本不读，不放进资料文件夹。
+  const skipped = screening ? jobs.filter((job) => !(job.result?.office?.kind === 'xlsx' || job.result?.csv)).map((job) => job.result?.name || '') : [];
+  const exportable = screening ? jobs.filter((job) => job.result?.office?.kind === 'xlsx' || job.result?.csv) : jobs;
+  if (!exportable.length) throw new Error('LOCAL_BATCH_SCREENING_NO_TABLES');
   const analysisOptions = sanitizeAnalysisOptions(payload?.analysisOptions);
   // 可逆批次必须先有已解锁的文件仓库：整批对照表存成一条记录。
   const batchVault = reversibleBatch ? requireVault(payload?.vaultToken, event.sender.id) : null;
@@ -979,13 +991,15 @@ async function exportCompletedBatch(event, payload) {
   batchExportSessions.set(event.sender.id, exportSession);
   let batchEntry = null;
   try {
-    let exportJobs = jobs;
+    let exportJobs = exportable;
     let batch = { analysisOptions };
+    let outputDirectory = selection.filePaths[0];
     if (reversibleBatch) {
-      const preparedBatch = prepareReversibleBatch(jobs, analysisOptions, await loadRedactionEngine(), await loadReversibleEngine());
+      const preparedBatch = prepareReversibleBatch(exportable, analysisOptions, await loadRedactionEngine(), await loadReversibleEngine(),
+        { screening, pseudonym: screening ? await loadPseudonymEngine() : null });
       batchEntry = await addVaultEntry(batchVault.vaultSession.context, {
         kind: 'reversible-map',
-        name: `批次 · ${jobs.length} 个文件 · ${new Date().toLocaleDateString('zh-CN')}`,
+        name: `${screening ? '批次（税务筛查）' : '批次'} · ${exportable.length} 个文件 · ${new Date().toLocaleDateString('zh-CN')}`,
         text: preparedBatch.text,
         mapping: preparedBatch.mapping,
         findingCount: preparedBatch.findingCount,
@@ -993,8 +1007,17 @@ async function exportCompletedBatch(event, payload) {
       });
       exportJobs = preparedBatch.safeJobs;
       batch = { analysisOptions, reversible: true, prepared: preparedBatch.prepared, fileNumber: batchEntry.fileNumber, mapping: preparedBatch.mapping };
+      if (screening) {
+        // 资料文件夹只放资料（筛查脚本会读取文件夹里的每个文件）；审计记录、清单、给 AI 的要求放在旁边的记录文件夹。
+        outputDirectory = path.join(selection.filePaths[0], `${batchEntry.fileNumber}-税务筛查资料`);
+        batch.recordDirectory = path.join(selection.filePaths[0], `${batchEntry.fileNumber}-墨隐记录`);
+        await fs.mkdir(outputDirectory, { recursive: true });
+        await fs.mkdir(batch.recordDirectory, { recursive: true });
+      }
     }
-    const result = await exportBatchResults(exportJobs, selection.filePaths[0], batchExportHandlers(exportSession, batch));
+    const handlers = batchExportHandlers(exportSession, batch);
+    if (batch.recordDirectory) handlers.recordDirectory = batch.recordDirectory;
+    const result = await exportBatchResults(exportJobs, outputDirectory, handlers);
     let batchInfo = null;
     if (reversibleBatch) {
       if (!result.exported) {
@@ -1002,10 +1025,16 @@ async function exportCompletedBatch(event, payload) {
         await deleteVaultEntry(batchVault.vaultSession.context, batchEntry.id).catch(() => {});
         batchEntry = null;
       } else {
-        const prompt = batchAiPrompt(batchEntry.fileNumber, result.exported, batch.mapping);
-        const promptPath = path.join(result.directory, `${batchEntry.fileNumber}-给AI的要求.txt`);
+        const prompt = screening
+          ? screeningAiPrompt(batchEntry.fileNumber, result.exported, batch.mapping)
+          : batchAiPrompt(batchEntry.fileNumber, result.exported, batch.mapping);
+        const promptPath = path.join(batch.recordDirectory || result.directory, `${batchEntry.fileNumber}-给AI的要求.txt`);
         await fs.writeFile(promptPath, `\ufeff${prompt}\n`, 'utf8').catch(() => {});
-        batchInfo = { id: batchEntry.id, fileNumber: batchEntry.fileNumber, fileCount: result.exported, tokenCount: batch.mapping.length, prompt, promptName: path.basename(promptPath) };
+        batchInfo = {
+          id: batchEntry.id, fileNumber: batchEntry.fileNumber, fileCount: result.exported, tokenCount: batch.mapping.length,
+          prompt, promptName: path.basename(promptPath), screening, dataDirectory: result.directory,
+          recordDirectory: batch.recordDirectory || '', skipped
+        };
       }
     }
     let vaultSave = { requested: 0, saved: 0, failed: 0, entries: [], errors: [] };
@@ -1191,9 +1220,11 @@ async function openReturnedDocument(event, payload) {
     inputPath = selected.filePaths[0];
   }
   if (!path.isAbsolute(inputPath)) throw new Error('LOCAL_PATH_INVALID');
+  const stat = await fs.stat(inputPath);
+  // 拖进来的是文件夹（如筛查技能生成的“筛查结果”）：按整个文件夹还原。
+  if (stat.isDirectory()) return openReturnedFolder(event, inputPath);
   const kind = path.extname(inputPath).toLowerCase().slice(1);
   if (!RESTORE_EXTENSIONS.includes(kind)) throw new Error('LOCAL_TYPE_UNSUPPORTED');
-  const stat = await fs.stat(inputPath);
   if (!stat.isFile()) throw new Error('LOCAL_NOT_A_FILE');
   let text;
   if (kind === 'docx' || kind === 'xlsx') text = (await extractOfficeDocument(inputPath)).text;
@@ -1205,22 +1236,51 @@ async function openReturnedDocument(event, payload) {
   return { canceled: false, token, kind, name: path.basename(inputPath), text, characters: text.length };
 }
 
+// ---------- 整个文件夹还原（如筛查技能生成的“筛查结果”） ----------
+const restoreFolderSessions = new Map();
+
+async function openReturnedFolder(event, folderPath) {
+  const listed = await listRestorableFiles(folderPath);
+  if (!listed.files.length) throw new Error('LOCAL_RESTORE_FOLDER_EMPTY');
+  const token = randomUUID();
+  for (const [key, value] of restoreFolderSessions) if (value.ownerId === event.sender.id) restoreFolderSessions.delete(key);
+  restoreFolderSessions.set(token, { path: folderPath, files: listed.files, ownerId: event.sender.id });
+  return { canceled: false, folder: true, token, path: folderPath, name: path.basename(folderPath), fileNumber: listed.fileNumber, files: listed.files, skipped: listed.skipped };
+}
+
+async function pickReturnedFolder(event) {
+  const selected = await dialog.showOpenDialog({ title: '选择要还原的文件夹（如“筛查结果”）', properties: ['openDirectory'] });
+  if (selected.canceled || !selected.filePaths[0]) return { canceled: true };
+  return openReturnedFolder(event, selected.filePaths[0]);
+}
+
+async function runFolderRestore(event, payload) {
+  const session = restoreFolderSessions.get(String(payload?.token || ''));
+  if (!session || session.ownerId !== event.sender.id) throw new Error('LOCAL_RESTORE_FOLDER_EXPIRED');
+  return restoreFolderFiles(session.path, session.files, payload?.mapping, {
+    restoreTokens: (await loadReversibleEngine()).restoreTokens,
+    restoreReversibleOffice,
+    extractCsvDocument,
+    renderRedactedCsv
+  });
+}
+
 async function saveRestoredDocument(event, payload) {
   const session = restoreSessions.get(String(payload?.token || ''));
   const mapping = payload?.mapping;
   if (!Array.isArray(mapping)) throw new Error('LOCAL_VAULT_MAPPING_INVALID');
   const asText = !session || session.ownerId !== event.sender.id || payload?.asText === true;
-  const kind = asText ? 'txt' : session.kind === 'md' ? 'txt' : session.kind;
+  const kind = asText ? (session?.kind === 'md' && payload?.asText !== true ? 'md' : 'txt') : session.kind === 'md' ? 'md' : session.kind;
   const sourceBase = session ? path.parse(session.path).name : String(payload?.nameHint || 'AI返回内容');
   const base = sourceBase.replace(/-?脱敏副本$/u, '').replace(/-?脱敏$/u, '') || '逆脱敏结果';
   const destination = await dialog.showSaveDialog({
     title: '下载逆脱敏结果',
     defaultPath: `${base}-逆脱敏.${kind}`,
-    filters: [{ name: kind === 'docx' ? 'Word 文档' : kind === 'xlsx' ? 'Excel 工作簿' : kind === 'csv' ? 'CSV 表格' : kind === 'pdf' ? 'PDF 文档' : 'UTF-8 文本', extensions: [kind] }]
+    filters: [{ name: kind === 'docx' ? 'Word 文档' : kind === 'xlsx' ? 'Excel 工作簿' : kind === 'csv' ? 'CSV 表格' : kind === 'pdf' ? 'PDF 文档' : kind === 'md' ? 'Markdown 文档' : 'UTF-8 文本', extensions: [kind] }]
   });
   if (destination.canceled || !destination.filePath) return { canceled: true };
   const reversible = await loadReversibleEngine();
-  if (kind === 'txt') {
+  if (kind === 'txt' || kind === 'md') {
     if (typeof payload?.text !== 'string') throw new Error('LOCAL_EXPORT_INVALID');
     const report = reversible.restoreTokens(payload.text, mapping, { mode: 'analysis' });
     if (Buffer.byteLength(report.restoredText, 'utf8') > EXPORT_LIMIT) throw new Error('LOCAL_EXPORT_TOO_LARGE');
@@ -2585,6 +2645,8 @@ ipcMain.handle('veilforge:ocr-correct', guardWithEvent(correctOcr));
 ipcMain.handle('veilforge:office-restore', guardWithEvent(restoreOfficeFromDialog));
 ipcMain.handle('veilforge:restore-open', guardWithEvent(openReturnedDocument));
 ipcMain.handle('veilforge:restore-save', guardWithEvent(saveRestoredDocument));
+ipcMain.handle('veilforge:restore-folder-pick', guardWithEvent(pickReturnedFolder));
+ipcMain.handle('veilforge:restore-folder-run', guardWithEvent(runFolderRestore));
 ipcMain.handle('veilforge:batch-enqueue', guardWithEvent(enqueueBatch));
 ipcMain.handle('veilforge:batch-list', guardWithEvent(listBatch));
 ipcMain.handle('veilforge:batch-open', guardWithEvent(openBatchResult));

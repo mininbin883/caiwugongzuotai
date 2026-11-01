@@ -45,6 +45,9 @@ const MESSAGES = [
   [/LOCAL_NER_|LOCAL_MODEL_PACK_/, '本地识别模型不可用（规则识别不受影响）。请确认完整包的“识别模型”分卷已解压。'],
   [/LOCAL_OCR_/, '文字识别没有完成，请重试；若图片模糊，可先提高清晰度。'],
   // 批处理
+  [/LOCAL_RESTORE_FOLDER_EMPTY/, '这个文件夹里没有可以还原的文件（支持 Word、Excel、CSV、Markdown、TXT）。'],
+  [/LOCAL_RESTORE_FOLDER_EXPIRED/, '文件夹的还原会话已失效，请重新选择文件夹。'],
+  [/LOCAL_BATCH_SCREENING_NO_TABLES/, '税务筛查模式只导出 Excel 和 CSV 表格（筛查脚本只读这两种），当前已完成的任务里没有表格文件。'],
   [/LOCAL_BATCH_LIMIT_EXCEEDED/, '一次加入的文件太多，请分批处理。'],
   [/LOCAL_BATCH_EXPORT_ACTIVE/, '批量导出正在进行，请等它完成。'],
   [/LOCAL_BATCH_(?:EMPTY|EXPORT_EMPTY)/, '没有可以导出的已完成任务。'],

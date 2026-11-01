@@ -62,7 +62,8 @@ async function renderJob(job, directory, handlers, reserved, index = 0) {
   const redactedText = analysis.redactedText ?? await handlers.applyFindings(result.text, findings);
   const prefix = typeof handlers.outputPrefix === 'function' ? handlers.outputPrefix(index) : '';
   const outputPath = await availablePath(directory, outputFileName(result, prefix), reserved, true);
-  const auditPath = `${outputPath}.audit.json`;
+  // 记录目录：审计记录可与资料分开存放（税务筛查模式下资料文件夹只放资料本身）。
+  const auditPath = path.join(handlers.recordDirectory || directory, `${path.basename(outputPath)}.audit.json`);
   let render = { unchanged: findings.length === 0 };
   try {
     if (result.csv) {
@@ -143,7 +144,7 @@ async function exportBatchResults(jobs, directory, handlers = {}) {
     }
   }
 
-  const manifestPath = await availablePath(directory, '墨隐-批处理清单.json', reserved);
+  const manifestPath = await availablePath(handlers.recordDirectory || directory, '墨隐-批处理清单.json', reserved);
   const manifest = {
     format: MANIFEST_FORMAT,
     version: 1,

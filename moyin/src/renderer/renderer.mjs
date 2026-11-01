@@ -77,10 +77,10 @@ const elements = Object.fromEntries([
   'vaultConfirmLabel', 'vaultPasswordConfirm', 'vaultDialogError', 'vaultDialogCancel', 'exportOfficeButton', 'exportCsvButton',
   'pdfPasswordDialog', 'pdfPasswordForm', 'pdfPasswordDescription', 'pdfPassword', 'pdfPasswordError', 'pdfPasswordCancel',
   'workflowGuide', 'workflowStepImport', 'workflowStepReview', 'workflowStepExport', 'workflowSummary',
-  'batchModeHint', 'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
+  'batchMode', 'batchModeHint', 'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
   'restorePanel', 'restoreInput', 'restoreOutput', 'restoreMode', 'restoreButton', 'restoreExportButton', 'restoreOfficeButton', 'restoreReport',
   'restoreChecklist', 'restoreConfirm', 'restoreConfirmLabel', 'exportAuditBox',
-  'restoreEntryLabel', 'restoreSearch', 'restoreUnlockButton', 'restoreSearchResults', 'restoreDrop', 'restoreImportButton', 'restoreFileState',
+  'restoreFolderButton', 'restoreEntryLabel', 'restoreSearch', 'restoreUnlockButton', 'restoreSearchResults', 'restoreDrop', 'restoreImportButton', 'restoreFileState',
   'exportBar', 'exportSummary', 'exportSummaryDetail', 'exportConfirm', 'exportPrimaryButton',
   'vaultGateDialog', 'vaultGateCreate', 'vaultGateOpen', 'vaultGateCancel',
   'nextStepsDialog', 'nextStepsTitle', 'nextStepsPath', 'nextStepsPrompt', 'nextStepsCopy', 'nextStepsDownload',
@@ -1665,6 +1665,13 @@ function renderBatchJobs() {
   elements.batchExportButton.textContent = state.batchExport
     ? state.batchExport.cancelRequested ? '停止中…' : '停止导出'
     : state.style === 'token' ? `导出为一个批次（${done} 个文件）` : `批量导出（不可逆，${done} 个文件）`;
+  const screening = elements.batchMode.value === 'screening';
+  elements.batchMode.disabled = Boolean(state.batchExport) || state.style !== 'token';
+  elements.batchModeHint.textContent = state.style !== 'token'
+    ? '当前在保护设置里选了不可逆的导出方式，批处理按不可逆方式逐个导出，不能逆脱敏。'
+    : screening
+      ? '税务筛查模式：人名换成“张甲子”这样的假名，单位只把字号换成 Q 编号（保留地区、行业、组织形式），税号保留前 8 位，号码换成同格式假号——“建筑业税务风险筛查”技能的规则可以照常判断个人、个体户、单位类别和所在地。只导出 Excel 和 CSV（技能只读这两种），资料单独放在一个文件夹里，直接交给 AI。'
+      : '导出为一个批次：整批共用一套代号（同一家公司、同一个人在所有文件里是同一个代号），整批只存一条仓库记录、一个编号。AI 基于这批文件写的报告，逆脱敏时选这一个编号即可。';
   elements.batchExportButton.disabled = state.batchExport?.cancelRequested || (!state.batchExport && done === 0);
   elements.batchClearButton.disabled = Boolean(state.batchExport);
   elements.batchList.replaceChildren();
@@ -2077,7 +2084,9 @@ function showNextSteps() {
   elements.nextStepsTitle.textContent = info.kind === 'batch'
     ? `已存为 批次 ${info.fileNumber}（${info.batchCount} 个文件）`
     : `已存为 文件 ${info.fileNumber}`;
-  elements.nextStepsPath.textContent = info.kind === 'batch'
+  elements.nextStepsPath.textContent = info.kind === 'batch' && info.screening
+    ? `把这个资料文件夹交给 AI：${info.dataDirectory}（里面只有资料本身）。“给 AI 的要求”和审计记录在：${info.recordDirectory}。${info.skipped?.length ? `没有导出（筛查技能不读 Word、PDF、图片）：${info.skipped.join('、')}。` : ''}筛查完成后，把“筛查结果”文件夹拖进“逆脱敏”页，一次换回。`
+    : info.kind === 'batch'
     ? `副本和“${info.fileNumber}-给AI的要求.txt”保存在：${info.path}。整批共用一套代号，AI 的报告或返回的任何文件，逆脱敏时都选这一个编号。`
     : info.path ? `副本保存在：${info.path}` : '';
   elements.nextStepsPrompt.value = currentAiPrompt();
@@ -2200,6 +2209,7 @@ elements.batchClearButton.addEventListener('click', async () => {
   }
 });
 
+elements.batchMode.addEventListener('change', renderBatchJobs);
 elements.batchExportButton.addEventListener('click', async () => {
   if (state.batchExport) {
     try {
@@ -2223,6 +2233,7 @@ elements.batchExportButton.addEventListener('click', async () => {
   try {
     const result = await window.veilforge.exportCompletedBatch({
       reversible,
+      screening: reversible && elements.batchMode.value === 'screening',
       autoVault: !reversible && state.batchAutoVault,
       vaultToken: state.vault?.token || null,
       analysisOptions: {
@@ -2240,7 +2251,11 @@ elements.batchExportButton.addEventListener('click', async () => {
         path: result.directory,
         kind: 'batch',
         batchCount: result.batch.fileCount,
-        prompt: result.batch.prompt
+        prompt: result.batch.prompt,
+        screening: Boolean(result.batch.screening),
+        dataDirectory: result.batch.dataDirectory,
+        recordDirectory: result.batch.recordDirectory,
+        skipped: result.batch.skipped || []
       };
       showNextSteps();
       if (result.failed) showToast(`批次 ${result.batch.fileNumber}：导出 ${result.exported} 个，失败 ${result.failed} 个`, 'error');
@@ -2651,7 +2666,7 @@ function renderRestoreState() {
     : file.edited ? `已导入 ${file.name}，内容被手动修改过，将导出为 TXT`
       : `已导入 ${file.name}${['docx', 'xlsx', 'csv', 'pdf'].includes(file.kind) ? `，将按原格式（${file.kind.toUpperCase()}）换回` : ''}`;
   elements.restoreFileState.classList.toggle('stale', Boolean(file?.edited));
-  elements.restoreExportButton.textContent = file && !file.edited && ['docx', 'xlsx', 'csv', 'pdf'].includes(file.kind)
+  elements.restoreExportButton.textContent = file && !file.edited && ['docx', 'xlsx', 'csv', 'pdf', 'md'].includes(file.kind)
     ? `下载逆脱敏结果（${file.kind.toUpperCase()}）` : '下载逆脱敏结果（TXT）';
 }
 
@@ -2710,10 +2725,58 @@ async function runRestoreSearch() {
   }
 }
 
+// ---------- 整个文件夹还原 ----------
+async function ensureRestoreEntryForNumber(fileNumber) {
+  if (!fileNumber || state.restoreEntry?.fileNumber === fileNumber) return Boolean(state.restoreEntry?.mapping);
+  if (!(await ensureVaultUnlocked(`这是 ${fileNumber} 的返回内容，请先解锁文件仓库`))) return false;
+  const entry = await findVaultEntryByNumber(fileNumber);
+  if (!entry) {
+    elements.restoreReport.textContent = `仓库里没有找到 ${fileNumber}。如果换过电脑，请先在“加密仓库”导入备份；也可以在上方手动查找后再还原。`;
+    return false;
+  }
+  await loadVaultEntry(entry.id, { keepInput: true });
+  return true;
+}
+
+async function restoreFolder(opened) {
+  try {
+    const ready = opened.fileNumber ? await ensureRestoreEntryForNumber(opened.fileNumber) : Boolean(state.restoreEntry?.mapping);
+    if (!ready || !state.restoreEntry?.mapping) {
+      if (!opened.fileNumber) elements.restoreReport.textContent = `没有从“${opened.name}”的路径里认出编号：请先在上方查找并选择对应的批次记录，再点“还原整个文件夹”。`;
+      return;
+    }
+    elements.restoreReport.textContent = `正在还原“${opened.name}”中的 ${opened.files.length} 个文件…`;
+    const result = await window.veilforge.runFolderRestore(opened.token, state.restoreEntry.mapping);
+    const ok = result.results.filter((item) => !item.error);
+    const failed = result.results.filter((item) => item.error);
+    const restored = ok.reduce((sum, item) => sum + (item.restored || 0), 0);
+    const unknown = ok.reduce((sum, item) => sum + (item.unknown || 0), 0);
+    elements.restoreChecklist.replaceChildren();
+    const title = document.createElement('h3');
+    title.textContent = `已还原到：${result.outputDirectory}`;
+    elements.restoreChecklist.append(title);
+    for (const item of result.results) {
+      elements.restoreChecklist.append(checklistRow([{ tag: 'code', text: item.rel }, { className: 'muted', text: item.error ? ` 失败：${friendlyError(item.error)}` : ` 换回 ${item.restored} 处${item.unknown ? `，${item.unknown} 个代号不属于这条记录` : ''}` }]));
+    }
+    if (opened.skipped?.length) {
+      const skipped = document.createElement('h3');
+      skipped.textContent = `未处理（不需要还原的文件类型）：${opened.skipped.join('、')}`;
+      elements.restoreChecklist.append(skipped);
+    }
+    elements.restoreChecklist.classList.remove('hidden');
+    elements.restoreReport.textContent = `文件夹还原完成：${ok.length} 个文件、共换回 ${restored} 处${failed.length ? `，${failed.length} 个失败` : ''}${unknown ? `，有 ${unknown} 个代号不属于这条记录，请确认选对了编号` : ''}。`;
+    elements.restoreReport.classList.toggle('needs-review', Boolean(failed.length || unknown));
+    showToast(`已还原 ${ok.length} 个文件到“${result.outputDirectory.split(/[\\/]/u).pop()}”`);
+  } catch (error) {
+    showToast(`文件夹还原失败：${friendlyError(error)}`, 'error');
+  }
+}
+
 async function importReturnedFile(file = null) {
   try {
     const opened = await window.veilforge.openReturnedDocument(file);
     if (!opened || opened.canceled) return;
+    if (opened.folder) { await restoreFolder(opened); return; }
     state.restoreFile = { ...opened, edited: false };
     elements.restoreInput.value = opened.text;
     elements.restoreOutput.value = '';
@@ -2884,6 +2947,14 @@ function runRestore() {
 }
 elements.restoreButton.addEventListener('click', runRestore);
 elements.restoreImportButton.addEventListener('click', () => importReturnedFile());
+elements.restoreFolderButton.addEventListener('click', async () => {
+  try {
+    const opened = await window.veilforge.pickReturnedFolder();
+    if (opened && !opened.canceled) await restoreFolder(opened);
+  } catch (error) {
+    showToast(`选择文件夹失败：${friendlyError(error)}`, 'error');
+  }
+});
 elements.restoreUnlockButton.addEventListener('click', async () => { if (await openVaultFlow()) renderRestoreState(); });
 elements.restoreSearch.addEventListener('input', () => {
   window.clearTimeout(restoreSearchTimer);
@@ -2902,7 +2973,7 @@ elements.restoreDrop.addEventListener('dragleave', () => elements.restoreDrop.cl
 elements.restoreExportButton.addEventListener('click', async () => {
   if (!state.restoreResult?.restoredText || !state.restoreEntry?.mapping) return;
   const file = state.restoreFile;
-  const originalFormat = Boolean(file && !file.edited && file.kind !== 'txt' && file.kind !== 'md');
+  const originalFormat = Boolean(file && !file.edited && file.kind !== 'txt');
   try {
     const result = await window.veilforge.saveRestoredDocument({
       token: originalFormat ? file.token : null,
