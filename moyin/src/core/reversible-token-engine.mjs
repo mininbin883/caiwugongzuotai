@@ -120,3 +120,57 @@ export function restoreTokens(input, mapping, options = {}) {
 }
 
 export const reversibleTokenFormat = Object.freeze({ pattern: TOKEN_PATTERN.source, prefix: '[MI_' });
+
+/**
+ * 批次共用的代号生成器：同一批文件中，同一类型、同一取值的信息始终得到同一个代号，
+ * 让 AI 能把不同文件（不同年度、不同报表）里的同一对象对应起来。最后得到一份合并的对照表。
+ */
+export function createSharedTokenizer(options = {}) {
+  const nonce = String(options.nonce || createTokenNonce()).toUpperCase();
+  if (!/^[A-F0-9]{8}$/u.test(nonce)) throw new Error('REVERSIBLE_NONCE_INVALID');
+  const byKey = new Map();
+  const mapping = [];
+  const reserved = new Set();
+  let serial = 0;
+  const nextToken = () => {
+    let token;
+    do {
+      serial += 1;
+      token = `[MI_${nonce}_${serial.toString(36).toUpperCase().padStart(3, '0')}]`;
+    } while (reserved.has(token));
+    return token;
+  };
+  return {
+    nonce,
+    tokenize(text, findings) {
+      const source = String(text || '');
+      for (const token of source.match(TOKEN_SCAN_PATTERN) || []) reserved.add(token);
+      const active = normalizedFindings(findings, source.length);
+      const assignments = [];
+      for (const finding of active) {
+        const value = source.slice(finding.start, finding.end);
+        const key = `${finding.type || 'custom'}\u0000${value}`;
+        let entry = byKey.get(key);
+        if (!entry) {
+          entry = { token: nextToken(), value, type: String(finding.type || 'custom'), label: String(finding.label || finding.type || '自定义'), occurrences: 0 };
+          byKey.set(key, entry);
+          mapping.push(entry);
+        }
+        entry.occurrences += 1;
+        assignments.push({ start: finding.start, end: finding.end, token: entry.token });
+      }
+      assignments.sort((left, right) => left.start - right.start || left.end - right.end);
+      const parts = [];
+      let cursor = 0;
+      for (const item of assignments) {
+        if (item.start < cursor) continue;
+        parts.push(source.slice(cursor, item.start), item.token);
+        cursor = item.end;
+      }
+      parts.push(source.slice(cursor));
+      return { tokenizedText: parts.join(''), assignments };
+    },
+    mapping: () => mapping.map((entry) => ({ ...entry })),
+    size: () => mapping.length
+  };
+}

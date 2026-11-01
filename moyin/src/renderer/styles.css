@@ -416,3 +416,4 @@ body.has-document .review-split > .findings-panel.hidden { display: none; }
 body.has-document .main-panel { overflow: visible; }
 .settings-apply { padding: 14px 16px; margin-bottom: 14px; }
 .settings-apply strong { font-size: 13px; }
+.batch-mode-hint { margin: 6px 0 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }

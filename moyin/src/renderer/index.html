@@ -246,14 +246,15 @@
             </div>
             <div class="batch-summary">
               <span id="batchSummary">0 个任务</span>
-              <label class="batch-auto-vault" for="batchAutoVault">
+              <label class="batch-auto-vault hidden" for="batchAutoVault">
                 <input id="batchAutoVault" type="checkbox" disabled>
                 <span>导出后自动入库</span>
               </label>
-              <button id="batchExportButton" class="button button-dark button-small" disabled>批量导出</button>
+              <button id="batchExportButton" class="button button-dark button-small" disabled>导出为一个批次</button>
               <button id="batchClearButton" class="button button-ghost button-small">清理已完成</button>
             </div>
           </div>
+          <p id="batchModeHint" class="batch-mode-hint">导出为一个批次：整批共用一套代号（同一家公司、同一个人在所有文件里是同一个代号），整批只存一条仓库记录、一个编号。AI 基于这批文件写的报告，逆脱敏时选这一个编号即可。</p>
           <div id="batchList" class="batch-list"></div>
         </section>
 

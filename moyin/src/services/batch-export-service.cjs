@@ -15,9 +15,10 @@ function cleanStem(value) {
     .slice(0, 120) || 'document';
 }
 
-function outputFileName(result) {
+function outputFileName(result, prefix = '') {
   const parsed = path.parse(String(result?.name || 'document.txt'));
-  const stem = `${cleanStem(parsed.name)}-脱敏`;
+  // 批次模式：MI-000123-01-原名-脱敏副本.xlsx，编号一致，逆脱敏时选这一个编号即可。
+  const stem = prefix ? `${prefix}-${cleanStem(parsed.name)}-脱敏副本` : `${cleanStem(parsed.name)}-脱敏`;
   if (result?.office?.kind === 'docx' || result?.office?.kind === 'xlsx') return `${stem}.${result.office.kind}`;
   if (result?.image?.kind === 'pdf') return `${stem}.pdf`;
   if (result?.image?.kind === 'image') return `${stem}.png`;
@@ -53,13 +54,14 @@ function safeFindings(findings) {
   return findings.map(({ type, label, start, end, replacement }) => ({ type, label, start, end, replacement }));
 }
 
-async function renderJob(job, directory, handlers, reserved) {
+async function renderJob(job, directory, handlers, reserved, index = 0) {
   const result = job?.result;
   if (!result || typeof result.text !== 'string') throw new Error('LOCAL_BATCH_EXPORT_RESULT_INVALID');
-  const analysis = await handlers.analyzeText(result.text);
-  const findings = Array.isArray(analysis?.findings) ? analysis.findings : [];
+  const analysis = await handlers.analyzeText(result.text, job);
+  const findings = Array.isArray(analysis?.findings) ? analysis.findings.filter((item) => item.enabled !== false) : [];
   const redactedText = analysis.redactedText ?? await handlers.applyFindings(result.text, findings);
-  const outputPath = await availablePath(directory, outputFileName(result), reserved, true);
+  const prefix = typeof handlers.outputPrefix === 'function' ? handlers.outputPrefix(index) : '';
+  const outputPath = await availablePath(directory, outputFileName(result, prefix), reserved, true);
   const auditPath = `${outputPath}.audit.json`;
   let render = { unchanged: findings.length === 0 };
   try {
@@ -131,7 +133,7 @@ async function exportBatchResults(jobs, directory, handlers = {}) {
     const job = jobs[index];
     progress({ status: 'processing', index, name: job?.result?.name || '' });
     try {
-      const record = await renderJob(job, directory, handlers, reserved);
+      const record = await renderJob(job, directory, handlers, reserved, index);
       records.push(record);
       progress({ status: 'done', index, name: record.sourceName, outputName: path.basename(record.outputPath) });
     } catch (error) {

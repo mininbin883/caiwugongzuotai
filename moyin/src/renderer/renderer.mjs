@@ -77,7 +77,7 @@ const elements = Object.fromEntries([
   'vaultConfirmLabel', 'vaultPasswordConfirm', 'vaultDialogError', 'vaultDialogCancel', 'exportOfficeButton', 'exportCsvButton',
   'pdfPasswordDialog', 'pdfPasswordForm', 'pdfPasswordDescription', 'pdfPassword', 'pdfPasswordError', 'pdfPasswordCancel',
   'workflowGuide', 'workflowStepImport', 'workflowStepReview', 'workflowStepExport', 'workflowSummary',
-  'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
+  'batchModeHint', 'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
   'restorePanel', 'restoreInput', 'restoreOutput', 'restoreMode', 'restoreButton', 'restoreExportButton', 'restoreOfficeButton', 'restoreReport',
   'restoreChecklist', 'restoreConfirm', 'restoreConfirmLabel', 'exportAuditBox',
   'restoreEntryLabel', 'restoreSearch', 'restoreUnlockButton', 'restoreSearchResults', 'restoreDrop', 'restoreImportButton', 'restoreFileState',
@@ -1664,7 +1664,7 @@ function renderBatchJobs() {
     : `${jobs.length} 个任务 · ${active} 进行中 · ${done} 完成`;
   elements.batchExportButton.textContent = state.batchExport
     ? state.batchExport.cancelRequested ? '停止中…' : '停止导出'
-    : '批量导出';
+    : state.style === 'token' ? `导出为一个批次（${done} 个文件）` : `批量导出（不可逆，${done} 个文件）`;
   elements.batchExportButton.disabled = state.batchExport?.cancelRequested || (!state.batchExport && done === 0);
   elements.batchClearButton.disabled = Boolean(state.batchExport);
   elements.batchList.replaceChildren();
@@ -1678,7 +1678,7 @@ function renderBatchJobs() {
     const name = document.createElement('strong');
     name.textContent = job.name;
     const meta = document.createElement('span');
-    const resultMeta = job.result ? ` · ${job.result.characters.toLocaleString('zh-CN')} 字符` : '';
+    const resultMeta = Number.isFinite(job.result?.characters) ? ` · ${job.result.characters.toLocaleString('zh-CN')} 字符` : '';
     meta.textContent = `${BATCH_STATUS[job.status]?.[0] || job.status}${resultMeta}${job.error ? ` · ${job.error}` : ''}`;
     const progress = document.createElement('div');
     progress.className = 'batch-progress';
@@ -2005,7 +2005,18 @@ async function finishVaultGate(choice) {
 }
 
 function exportBaseName() {
-  return (state.sourceName || '脱敏结果').replace(/\.[A-Za-z0-9]{1,5}$/u, '').replace(/[\\/:*?"<>|]+/gu, ' ').trim().slice(0, 80) || '脱敏结果';
+  let base = (state.sourceName || '脱敏结果').replace(/\.[A-Za-z0-9]{1,5}$/u, '').replace(/[\\/:*?"<>|]+/gu, ' ').trim().slice(0, 80) || '脱敏结果';
+  // 原文件名常含公司名、人名：出现在对照表里的值换成同一个代号，再识别一遍文件名本身。
+  if (state.style === 'token') {
+    const mapping = reversiblePreview().mapping.slice().sort((left, right) => right.value.length - left.value.length);
+    for (const entry of mapping) if (entry.value.length >= 2 && base.includes(entry.value)) base = base.split(entry.value).join(entry.token);
+    const leftover = analyzeText(base, { enabledTypes: [...state.enabledTypes], propagateRepeats: false, tableColumns: false }).findings;
+    for (const finding of leftover.slice().sort((left, right) => right.start - left.start)) {
+      if (/\[MI_/u.test(base.slice(Math.max(0, finding.start - 4), finding.end + 1))) continue;
+      base = `${base.slice(0, finding.start)}${TYPE_LABELS[finding.type] || '已隐藏'}${base.slice(finding.end)}`;
+    }
+  }
+  return base;
 }
 
 async function exportPrimary() {
@@ -2055,6 +2066,7 @@ async function exportPrimary() {
 function currentAiPrompt() {
   const info = state.lastExport;
   if (!info) return '';
+  if (info.prompt) return info.prompt;
   const formatNames = { txt: '文本', docx: 'Word 文档', xlsx: 'Excel 表格', csv: 'CSV 表格', pdf: 'PDF 文档' };
   return buildAiPrompt({ fileNumber: info.fileNumber, mapping: info.mapping, formatLabel: formatNames[info.kind] || '' });
 }
@@ -2062,8 +2074,12 @@ function currentAiPrompt() {
 function showNextSteps() {
   const info = state.lastExport;
   if (!info) return;
-  elements.nextStepsTitle.textContent = `已存为 文件 ${info.fileNumber}`;
-  elements.nextStepsPath.textContent = info.path ? `副本保存在：${info.path}` : '';
+  elements.nextStepsTitle.textContent = info.kind === 'batch'
+    ? `已存为 批次 ${info.fileNumber}（${info.batchCount} 个文件）`
+    : `已存为 文件 ${info.fileNumber}`;
+  elements.nextStepsPath.textContent = info.kind === 'batch'
+    ? `副本和“${info.fileNumber}-给AI的要求.txt”保存在：${info.path}。整批共用一套代号，AI 的报告或返回的任何文件，逆脱敏时都选这一个编号。`
+    : info.path ? `副本保存在：${info.path}` : '';
   elements.nextStepsPrompt.value = currentAiPrompt();
   elements.nextStepsDialog.showModal();
   elements.nextStepsPrompt.scrollTop = 0;
@@ -2196,14 +2212,40 @@ elements.batchExportButton.addEventListener('click', async () => {
     return;
   }
   const total = [...state.batchJobs.values()].filter((job) => job.status === 'done').length;
+  const reversible = state.style === 'token';
+  // 可逆批次：整批对照表存成一条仓库记录，先确保仓库已打开。
+  if (reversible && !(await requestVaultForExport())) {
+    showToast('已取消：导出批次需要文件仓库保存代号对照表', 'error');
+    return;
+  }
   state.batchExport = { status: 'starting', total, exported: 0, failed: 0 };
   renderBatchJobs();
   try {
     const result = await window.veilforge.exportCompletedBatch({
-      autoVault: state.batchAutoVault,
-      vaultToken: state.vault?.token || null
+      reversible,
+      autoVault: !reversible && state.batchAutoVault,
+      vaultToken: state.vault?.token || null,
+      analysisOptions: {
+        enabledTypes: [...state.enabledTypes],
+        customTerms: customTerms(),
+        typedTerms: typedTerms(),
+        alwaysKeepTerms: alwaysKeepTerms()
+      }
     });
     if (result.vaultState) await applyVaultStateAndFilters(result.vaultState);
+    if (result.batch) {
+      state.lastExport = {
+        id: result.batch.id,
+        fileNumber: result.batch.fileNumber,
+        path: result.directory,
+        kind: 'batch',
+        batchCount: result.batch.fileCount,
+        prompt: result.batch.prompt
+      };
+      showNextSteps();
+      if (result.failed) showToast(`批次 ${result.batch.fileNumber}：导出 ${result.exported} 个，失败 ${result.failed} 个`, 'error');
+      return;
+    }
     const vaultSuffix = state.batchAutoVault
       ? `，自动入库 ${result.vaultSave?.saved || 0} 个${result.vaultSave?.failed ? `、失败 ${result.vaultSave.failed} 个` : ''}`
       : '';
@@ -2811,7 +2853,9 @@ elements.restoreConfirm.addEventListener('change', updateRestoreExportState);
 function runRestore() {
   if (!state.restoreEntry?.mapping) return;
   try {
-    const result = restoreTokens(elements.restoreInput.value, state.restoreEntry.mapping, { mode: elements.restoreMode.value });
+    // 批次记录的对照表覆盖整批文件：返回内容只涉及其中一部分是正常的，不把其他文件的代号算作“缺失”。
+    const isBatch = /^批次/u.test(String(state.restoreEntry.name || ''));
+    const result = restoreTokens(elements.restoreInput.value, state.restoreEntry.mapping, { mode: isBatch ? 'analysis' : elements.restoreMode.value });
     const review = reviewRestoration({ sentText: state.restoreEntry.text, returnedText: elements.restoreInput.value, mapping: state.restoreEntry.mapping });
     result.review = review;
     result.requiresReview = result.requiresReview || review.requiresReview;
@@ -2820,8 +2864,9 @@ function runRestore() {
     const nonce = state.restoreEntry.mapping[0]?.token?.slice(4, 12);
     const foreignOnly = !result.restoredCount && /\[MI_[A-F0-9]{8}_/u.test(elements.restoreInput.value) && nonce && !elements.restoreInput.value.includes(`[MI_${nonce}_`);
     const parts = [`已恢复 ${result.restoredCount} 处`];
+    if (isBatch) parts.push('批次记录：只核对返回内容里出现的代号');
     if (foreignOnly) parts.unshift('这份内容里的代号不属于当前文件，请确认选对了文件编号');
-    if (result.missing.length) parts.push(`未出现代号 ${result.missing.length} 个`);
+    if (result.missing.length && !isBatch) parts.push(`未出现代号 ${result.missing.length} 个`);
     if (result.unknownTokens.length) parts.push(`未知代号 ${result.unknownTokens.length} 个`);
     if (result.repeated.length) parts.push(`重复代号 ${result.repeated.length} 个`);
     const reviewSummary = summarizeReview(review);

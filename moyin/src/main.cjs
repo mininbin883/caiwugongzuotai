@@ -41,6 +41,7 @@ const { runVaultV3CapacityScenario } = require('./services/vault-v3-capacity-smo
 const { runVaultV3MaintenanceScenario } = require('./services/vault-v3-maintenance-smoke.cjs');
 const { outputFileName, exportBatchResults } = require('./services/batch-export-service.cjs');
 const { saveBatchRecordsToVault } = require('./services/batch-vault-service.cjs');
+const { prepareReversibleBatch, batchAiPrompt } = require('./services/batch-reversible-service.cjs');
 const { loadNerModel } = require('./services/ner-service.cjs');
 const { findFirstModelPack } = require('./services/model-pack-service.cjs');
 const { inspectRapidOcrBackend } = require('./services/rapidocr-service.cjs');
@@ -911,9 +912,10 @@ function loadReversibleEngine() {
   return reversibleEnginePromise;
 }
 
-function batchExportHandlers(exportSession) {
+function batchExportHandlers(exportSession, batch = null) {
   return {
-    analyzeText: async (text) => (await loadRedactionEngine()).analyzeText(text),
+    analyzeText: async (text, job) => batch?.prepared?.get(job?.id) || (await loadRedactionEngine()).analyzeText(text, batch?.analysisOptions || {}),
+    outputPrefix: batch?.fileNumber ? (index) => `${batch.fileNumber}-${String(index + 1).padStart(2, '0')}` : undefined,
     applyFindings: (text, findings) => redactionEnginePromise.then((engine) => engine.applyFindings(text, findings)),
     renderOffice: async (descriptor, findings, outputPath) => {
       const officeSession = officeSessions.get(String(descriptor?.token || ''));
@@ -923,7 +925,8 @@ function batchExportHandlers(exportSession) {
     renderPdf: async (descriptor, findings, outputPath) => {
       const imageSession = imageSessions.get(String(descriptor?.token || ''));
       if (!imageSession || imageSession.kind !== 'pdf') throw new Error('LOCAL_IMAGE_SESSION_EXPIRED');
-      return renderRedactedPdf(imageSession, findings, outputPath);
+      // 批次可逆模式：PDF 写入代号并生成坐标副本，以便逆脱敏。
+      return batch?.reversible ? renderTokenizedPdf(imageSession, findings, outputPath) : renderRedactedPdf(imageSession, findings, outputPath);
     },
     renderImage: async (descriptor, findings, outputPath) => {
       const imageSession = imageSessions.get(String(descriptor?.token || ''));
@@ -943,22 +946,71 @@ function batchExportHandlers(exportSession) {
   };
 }
 
+// 批处理沿用界面上的保护设置（开启的类型、自定义词、类型化词、保留词）。
+function sanitizeAnalysisOptions(value) {
+  const options = value && typeof value === 'object' ? value : {};
+  const list = (items, max = 2000) => (Array.isArray(items) ? items : []).map((item) => String(item).slice(0, 200)).filter(Boolean).slice(0, max);
+  const typed = {};
+  if (options.typedTerms && typeof options.typedTerms === 'object') {
+    for (const [type, terms] of Object.entries(options.typedTerms)) typed[String(type).slice(0, 20)] = list(terms);
+  }
+  return {
+    enabledTypes: Array.isArray(options.enabledTypes) ? list(options.enabledTypes, 50) : undefined,
+    customTerms: list(options.customTerms),
+    typedTerms: typed,
+    alwaysKeepTerms: list(options.alwaysKeepTerms)
+  };
+}
+
 async function exportCompletedBatch(event, payload) {
   if (batchExportSessions.has(event.sender.id)) throw new Error('LOCAL_BATCH_EXPORT_ACTIVE');
   const jobs = batchQueue.list((job) => job.metadata.ownerId === event.sender.id && job.status === 'done' && job.result);
   if (!jobs.length) throw new Error('LOCAL_BATCH_EXPORT_EMPTY');
+  const reversibleBatch = payload?.reversible === true;
+  const analysisOptions = sanitizeAnalysisOptions(payload?.analysisOptions);
+  // 可逆批次必须先有已解锁的文件仓库：整批对照表存成一条记录。
+  const batchVault = reversibleBatch ? requireVault(payload?.vaultToken, event.sender.id) : null;
   const selection = await dialog.showOpenDialog({
-    title: '选择批量脱敏结果保存目录',
+    title: reversibleBatch ? '选择批次副本的保存目录（建议新建一个空文件夹）' : '选择批量脱敏结果保存目录',
     properties: ['openDirectory', 'createDirectory']
   });
   if (selection.canceled || !selection.filePaths[0]) return { canceled: true, exported: 0, failed: 0 };
   const exportSession = { ownerId: event.sender.id, webContents: event.sender, cancelRequested: false };
   batchExportSessions.set(event.sender.id, exportSession);
+  let batchEntry = null;
   try {
-    const result = await exportBatchResults(jobs, selection.filePaths[0], batchExportHandlers(exportSession));
+    let exportJobs = jobs;
+    let batch = { analysisOptions };
+    if (reversibleBatch) {
+      const preparedBatch = prepareReversibleBatch(jobs, analysisOptions, await loadRedactionEngine(), await loadReversibleEngine());
+      batchEntry = await addVaultEntry(batchVault.vaultSession.context, {
+        kind: 'reversible-map',
+        name: `批次 · ${jobs.length} 个文件 · ${new Date().toLocaleDateString('zh-CN')}`,
+        text: preparedBatch.text,
+        mapping: preparedBatch.mapping,
+        findingCount: preparedBatch.findingCount,
+        findingTypes: preparedBatch.findingTypes
+      });
+      exportJobs = preparedBatch.safeJobs;
+      batch = { analysisOptions, reversible: true, prepared: preparedBatch.prepared, fileNumber: batchEntry.fileNumber, mapping: preparedBatch.mapping };
+    }
+    const result = await exportBatchResults(exportJobs, selection.filePaths[0], batchExportHandlers(exportSession, batch));
+    let batchInfo = null;
+    if (reversibleBatch) {
+      if (!result.exported) {
+        // 一个文件都没导出：撤销这条批次记录，不留空编号。
+        await deleteVaultEntry(batchVault.vaultSession.context, batchEntry.id).catch(() => {});
+        batchEntry = null;
+      } else {
+        const prompt = batchAiPrompt(batchEntry.fileNumber, result.exported, batch.mapping);
+        const promptPath = path.join(result.directory, `${batchEntry.fileNumber}-给AI的要求.txt`);
+        await fs.writeFile(promptPath, `\ufeff${prompt}\n`, 'utf8').catch(() => {});
+        batchInfo = { id: batchEntry.id, fileNumber: batchEntry.fileNumber, fileCount: result.exported, tokenCount: batch.mapping.length, prompt, promptName: path.basename(promptPath) };
+      }
+    }
     let vaultSave = { requested: 0, saved: 0, failed: 0, entries: [], errors: [] };
-    let vaultState = null;
-    if (payload?.autoVault) {
+    let vaultState = reversibleBatch ? publicVaultState(batchVault.token, batchVault.vaultSession) : null;
+    if (payload?.autoVault && !reversibleBatch) {
       try {
         const { token, vaultSession } = requireVault(payload?.vaultToken, event.sender.id);
         const jobsById = new Map(jobs.map((job) => [job.id, job]));
@@ -998,8 +1050,12 @@ async function exportCompletedBatch(event, payload) {
       })),
       errors: result.errors,
       vaultSave,
-      vaultState
+      vaultState,
+      batch: batchInfo
     };
+  } catch (error) {
+    if (batchEntry && batchVault) await deleteVaultEntry(batchVault.vaultSession.context, batchEntry.id).catch(() => {});
+    throw error;
   } finally {
     batchExportSessions.delete(event.sender.id);
   }
