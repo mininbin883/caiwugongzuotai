@@ -383,6 +383,35 @@ async function deleteVaultEntry(context, id) {
   return { deletedId: removed.id, deletedFileNumber: removed.fileNumber, orphanedBlobs, stats: vaultStatistics(context) };
 }
 
+// 批量删除：一次提交索引。删除只是从目录中移除，旧密文块要“压缩回收空间”后才真正清除。
+async function deleteVaultEntries(context, ids) {
+  if (!context?.data || !Buffer.isBuffer(context.key)) throw new Error('LOCAL_VAULT_SESSION_INVALID');
+  const wanted = new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean));
+  if (!wanted.size || wanted.size > 5000) throw new Error('LOCAL_VAULT_ENTRY_NOT_FOUND');
+  const next = structuredClone(context.data);
+  const removed = next.entries.filter((entry) => wanted.has(entry.id) && entry.kind !== 'file-blob');
+  if (!removed.length) throw new Error('LOCAL_VAULT_ENTRY_NOT_FOUND');
+  const removedIds = new Set(removed.map((entry) => entry.id));
+  next.entries = next.entries.filter((entry) => !removedIds.has(entry.id));
+  const referencedBlobIds = new Set(next.entries.flatMap((entry) => (entry.attachments || []).map((item) => item.blobId)));
+  const beforeBlobCount = next.entries.filter((entry) => entry.kind === 'file-blob').length;
+  next.entries = next.entries.filter((entry) => entry.kind !== 'file-blob' || referencedBlobIds.has(entry.id));
+  const orphanedBlobs = beforeBlobCount - next.entries.filter((entry) => entry.kind === 'file-blob').length;
+  next.deletedEntries = Number(next.deletedEntries || 0) + removed.length;
+  next.schemaVersion = VAULT_SCHEMA_VERSION;
+  await storage.commitIndex(context, next);
+  return { deleted: removed.length, deletedFileNumbers: removed.map((entry) => entry.fileNumber), orphanedBlobs, stats: vaultStatistics(context) };
+}
+
+/** 返回符合筛选条件的全部记录编号（用于“全选筛选结果”）。 */
+function listVaultEntryIds(context, filters) {
+  if (!context?.data) throw new Error('LOCAL_VAULT_SESSION_INVALID');
+  const visible = context.data.entries.filter((entry) => entry.kind !== 'file-blob');
+  return filterVaultEntries(visible, filters).entries
+    .sort((left, right) => right.sequence - left.sequence)
+    .map((entry) => ({ id: entry.id, fileNumber: entry.fileNumber }));
+}
+
 async function compactVault(context) {
   if (!context?.data || !Buffer.isBuffer(context.key)) throw new Error('LOCAL_VAULT_SESSION_INVALID');
   const before = vaultStatistics(context);
@@ -420,13 +449,22 @@ async function compactVault(context) {
   }
 }
 
-async function exportVaultBackup(context, backupPath, password) {
+async function exportVaultBackup(context, backupPath, password, options = {}) {
   if (!context?.data || !Buffer.isBuffer(context.key)) throw new Error('LOCAL_VAULT_SESSION_INVALID');
   storage.assertAbsoluteFile(backupPath);
+  // 只导出所选记录：连同它们引用的附件一起导出，其他记录不进入这份备份。
+  let selected = context.data.entries;
+  if (Array.isArray(options.entryIds) && options.entryIds.length) {
+    const wanted = new Set(options.entryIds.map(String));
+    const records = context.data.entries.filter((entry) => wanted.has(entry.id) && entry.kind !== 'file-blob');
+    if (!records.length) throw new Error('LOCAL_VAULT_ENTRY_NOT_FOUND');
+    const blobIds = new Set(records.flatMap((entry) => (entry.attachments || []).map((item) => item.blobId)));
+    selected = context.data.entries.filter((entry) => wanted.has(entry.id) || (entry.kind === 'file-blob' && blobIds.has(entry.id)));
+  }
   const backup = await storage.createChunkVault(backupPath, password, VAULT_BACKUP_FORMAT);
   try {
     async function* sourceEntries() {
-      for (const metadata of context.data.entries) yield await readVaultEntry(context, metadata.id);
+      for (const metadata of selected) yield await readVaultEntry(context, metadata.id);
     }
     await storage.appendEntries(backup, sourceEntries(), {
       schemaVersion: VAULT_SCHEMA_VERSION,
@@ -437,7 +475,8 @@ async function exportVaultBackup(context, backupPath, password) {
     const result = {
       filePath: backupPath,
       name: path.basename(backupPath),
-      entries: context.data.entries.length,
+      entries: selected.length,
+      records: selected.filter((entry) => entry.kind !== 'file-blob').length,
       bytes: stat.size,
       sha256: await storage.sha256File(backupPath)
     };
@@ -611,6 +650,8 @@ module.exports = {
   compactVault,
   vaultStatistics,
   exportVaultBackup,
+  deleteVaultEntries,
+  listVaultEntryIds,
   importVaultBackup,
   rotateVaultPassword,
   closeVault,

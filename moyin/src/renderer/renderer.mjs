@@ -23,6 +23,9 @@ const state = {
   unexported: false,
   lastExport: null,
   restoreFile: null,
+  vaultSelected: new Map(),
+  vaultDetailId: null,
+  vaultLastClicked: -1,
   reviewView: null,
   columnPolicies: new Map(),
   openGroups: new Set(),
@@ -80,6 +83,11 @@ const elements = Object.fromEntries([
   'batchMode', 'batchModeHint', 'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
   'restorePanel', 'restoreInput', 'restoreOutput', 'restoreMode', 'restoreButton', 'restoreExportButton', 'restoreOfficeButton', 'restoreReport',
   'restoreChecklist', 'restoreConfirm', 'restoreConfirmLabel', 'exportAuditBox',
+  'vaultPanel', 'vaultPanelLocked', 'vaultPanelBody', 'vaultSelectPage', 'vaultDetail', 'vaultSelectionBar', 'vaultSelectionText',
+  'vaultSelectAllButton', 'vaultClearSelectionButton', 'vaultBackupSelectedButton', 'vaultDeleteSelectedButton',
+  'vaultCompactHint', 'vaultCompactHintText', 'vaultCompactNowButton', 'vaultCompactLaterButton',
+  'vaultDeleteDialog', 'vaultDeleteTitle', 'vaultDeleteList', 'vaultDeleteBackupButton', 'vaultDeleteCancelButton', 'vaultDeleteConfirmButton',
+  'restorePicker', 'restorePickerButton', 'restorePickerPop',
   'restoreFolderButton', 'restoreEntryLabel', 'restoreSearch', 'restoreUnlockButton', 'restoreSearchResults', 'restoreDrop', 'restoreImportButton', 'restoreFileState',
   'exportBar', 'exportSummary', 'exportSummaryDetail', 'exportConfirm', 'exportPrimaryButton',
   'vaultGateDialog', 'vaultGateCreate', 'vaultGateOpen', 'vaultGateCancel',
@@ -123,7 +131,9 @@ function renderModuleNavigation() {
   }
   elements.batchPanel.classList.toggle('module-hidden', active !== 'batch');
   elements.restorePanel.classList.toggle('module-hidden', active !== 'restore');
-  elements.moduleOverview.classList.toggle('hidden', active === 'redact');
+  elements.vaultPanel.classList.toggle('module-hidden', active !== 'vault');
+  // 仓库解锁后把空间留给记录表格，不再显示说明卡片。
+  elements.moduleOverview.classList.toggle('hidden', active === 'redact' || (active === 'vault' && Boolean(state.vault)));
   elements.moduleOverviewKicker.textContent = definition.kicker;
   elements.moduleOverviewTitle.textContent = definition.title;
   elements.moduleOverviewDescription.textContent = definition.description;
@@ -369,6 +379,7 @@ async function refreshVaultEntries({ append = false } = {}) {
 
 function renderVaultState() {
   renderRestoreState();
+  if (state.activeModule === 'vault') renderModuleNavigation();
   const unlocked = Boolean(state.vault);
   if (!unlocked) {
     state.autoSaveToVault = false;
@@ -391,8 +402,7 @@ function renderVaultState() {
   elements.vaultBundleSaveButton.textContent = state.vaultAttachmentToken
     ? state.vaultAttachmentFiles > 1 ? '保存原件＋脱敏副本' : '保存导出副本附件'
     : '导出后可保存原件＋副本';
-  elements.vaultEntryList.replaceChildren();
-  if (!unlocked) return;
+  if (!unlocked) { renderVaultRows(); return; }
   elements.vaultName.textContent = state.vault.name;
   elements.vaultTimeout.value = String(state.vault.timeoutMinutes);
   elements.vaultSearchInput.value = state.vaultFilters.query;
@@ -411,56 +421,238 @@ function renderVaultState() {
     ? `${formatBytes(stats.fileBytes)} · 附件 ${stats.attachmentReferences || 0}/${stats.fileBlobs || 0} · 去重 ${stats.deduplicatedReferences || 0} · 可回收 ${formatBytes(stats.reclaimableBytes)}`
     : '';
   renderVaultBackupHistory();
+  renderVaultRows();
+}
+
+// ---------- 仓库表格：多选、详情、批量删除 ----------
+function vaultEntryType(entry) {
+  if (entry.kind !== 'reversible-map') return { key: 'text', label: '脱敏文本' };
+  if (/^批次（税务筛查）/u.test(entry.name || '')) return { key: 'screening', label: '税务筛查' };
+  if (/^批次/u.test(entry.name || '')) return { key: 'batch', label: '批次' };
+  return { key: 'single', label: '单文件' };
+}
+
+function shortDate(value) {
+  const date = new Date(value || '');
+  return Number.isNaN(date.getTime()) ? '' : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function renderVaultRows() {
+  const unlocked = Boolean(state.vault);
+  elements.vaultPanelLocked.classList.toggle('hidden', unlocked);
+  elements.vaultPanelBody.classList.toggle('hidden', !unlocked);
+  elements.vaultEntryList.replaceChildren();
+  if (!unlocked) { state.vaultSelected.clear(); renderVaultSelection(); return; }
   if (!state.vault.entries.length) {
     const empty = document.createElement('div');
     empty.className = 'vault-entry-empty';
-    empty.textContent = vaultFiltersActive() ? '没有符合筛选条件的记录' : '仓库尚无内容';
+    empty.textContent = vaultFiltersActive() ? '没有符合筛选条件的记录' : '仓库里还没有记录。导出脱敏副本后会自动存进来。';
     elements.vaultEntryList.append(empty);
-    return;
   }
-  for (const entry of state.vault.entries) {
+  state.vault.entries.forEach((entry, index) => {
     const row = document.createElement('div');
-    row.className = 'vault-entry-row';
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'vault-entry';
-    const name = document.createElement('strong');
-    name.textContent = `${entry.fileNumber || 'MI-??????'} · ${entry.name}`;
-    const detail = document.createElement('span');
-    const kindLabel = entry.kind === 'reversible-map' ? `可逆 · ${entry.audit.tokenCount || 0} 个代号` : '脱敏文本';
-    const attachmentCount = entry.attachments?.length || 0;
-    detail.textContent = `${kindLabel} · ${entry.characters.toLocaleString('zh-CN')} 字符 · ${entry.audit.findingCount} 项${attachmentCount ? ` · ${attachmentCount} 个加密附件` : ''}`;
-    button.append(name, detail);
-    button.addEventListener('click', () => loadVaultEntry(entry.id));
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'vault-entry-delete';
-    remove.title = `删除 ${entry.fileNumber}（删除后，外面流转的这份副本将无法再逆脱敏）`;
-    remove.setAttribute('aria-label', `删除 ${entry.name}`);
-    remove.textContent = '×';
-    remove.addEventListener('click', () => deleteVaultRecord(entry));
-    const attachmentActions = document.createElement('div');
-    attachmentActions.className = 'vault-attachment-actions';
-    for (const attachment of entry.attachments || []) {
-      const exportButton = document.createElement('button');
-      exportButton.type = 'button';
-      exportButton.className = 'vault-attachment-badge';
-      exportButton.title = `导出 ${attachment.name}`;
-      exportButton.textContent = attachment.role === 'original' ? '原件' : attachment.role === 'redacted-copy' ? '脱敏副本' : '附件';
-      exportButton.addEventListener('click', () => exportStoredAttachment(entry, attachment));
-      attachmentActions.append(exportButton);
-    }
+    row.className = `vault-row ${state.vaultSelected.has(entry.id) ? 'selected' : ''} ${state.vaultDetailId === entry.id ? 'active' : ''}`;
+    const checkLabel = document.createElement('label');
+    checkLabel.className = 'vault-check';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = state.vaultSelected.has(entry.id);
+    checkbox.setAttribute('aria-label', `选择 ${entry.fileNumber}`);
+    checkbox.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleVaultSelection(index, checkbox.checked, event.shiftKey);
+    });
+    checkLabel.addEventListener('click', (event) => event.stopPropagation());
+    checkLabel.append(checkbox);
+    const number = document.createElement('span');
+    number.textContent = entry.fileNumber || '';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = entry.name;
+    name.title = entry.name;
+    const type = vaultEntryType(entry);
+    const typeCell = document.createElement('span');
+    const badge = document.createElement('span');
+    badge.className = `vault-type ${type.key}`;
+    badge.textContent = type.label;
+    typeCell.append(badge);
+    const date = document.createElement('span');
+    date.textContent = shortDate(entry.createdAt);
+    const tokens = document.createElement('span');
+    tokens.className = 'num';
+    tokens.textContent = entry.kind === 'reversible-map' ? String(entry.audit?.tokenCount || 0) : '—';
+    const actions = document.createElement('span');
+    actions.className = 'actions';
     if (entry.kind === 'reversible-map') {
       const restore = document.createElement('button');
       restore.type = 'button';
-      restore.className = 'button button-ghost button-small vault-entry-restore';
+      restore.className = 'mini-button';
       restore.textContent = '去逆脱敏 →';
-      restore.title = `导入 AI 返回的内容，把 ${entry.fileNumber} 的代号换回原文`;
-      restore.addEventListener('click', () => loadVaultEntry(entry.id));
-      attachmentActions.append(restore);
+      restore.addEventListener('click', (event) => { event.stopPropagation(); loadVaultEntry(entry.id); });
+      actions.append(restore);
+    } else {
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'mini-button';
+      open.textContent = '载入';
+      open.addEventListener('click', (event) => { event.stopPropagation(); loadVaultEntry(entry.id); });
+      actions.append(open);
     }
-    row.append(button, attachmentActions, remove);
+    row.append(checkLabel, number, name, typeCell, date, tokens, actions);
+    row.addEventListener('click', () => showVaultDetail(entry.id));
     elements.vaultEntryList.append(row);
+  });
+  const pageIds = state.vault.entries.map((entry) => entry.id);
+  elements.vaultSelectPage.checked = pageIds.length > 0 && pageIds.every((id) => state.vaultSelected.has(id));
+  elements.vaultSelectPage.indeterminate = !elements.vaultSelectPage.checked && pageIds.some((id) => state.vaultSelected.has(id));
+  renderVaultSelection();
+}
+
+function toggleVaultSelection(index, checked, range) {
+  const entries = state.vault?.entries || [];
+  const from = range && state.vaultLastClicked >= 0 ? Math.min(state.vaultLastClicked, index) : index;
+  const to = range && state.vaultLastClicked >= 0 ? Math.max(state.vaultLastClicked, index) : index;
+  for (let cursor = from; cursor <= to; cursor += 1) {
+    const entry = entries[cursor];
+    if (!entry) continue;
+    if (checked) state.vaultSelected.set(entry.id, entry.fileNumber); else state.vaultSelected.delete(entry.id);
+  }
+  state.vaultLastClicked = index;
+  renderVaultRows();
+}
+
+function renderVaultSelection() {
+  const count = state.vaultSelected.size;
+  elements.vaultSelectionBar.classList.toggle('hidden', !count);
+  elements.vaultSelectionText.textContent = `已选 ${count} 条`;
+  const filtered = state.vault?.page?.filteredTotal ?? 0;
+  elements.vaultSelectAllButton.textContent = `全选筛选结果（${filtered} 条）`;
+  elements.vaultSelectAllButton.classList.toggle('hidden', !state.vault || count >= filtered);
+  elements.vaultDeleteSelectedButton.textContent = `删除所选 ${count} 条…`;
+  elements.vaultBackupSelectedButton.textContent = `导出所选 ${count} 条备份…`;
+}
+
+async function showVaultDetail(entryId) {
+  if (!state.vault) return;
+  state.vaultDetailId = entryId;
+  renderVaultRows();
+  const panel = elements.vaultDetail;
+  panel.classList.remove('hidden');
+  panel.parentElement.classList.add('with-detail');
+  panel.replaceChildren(Object.assign(document.createElement('div'), { className: 'column-meta', textContent: '正在读取…' }));
+  try {
+    const entry = await window.veilforge.readVaultEntry(state.vault.token, entryId);
+    if (state.vaultDetailId !== entryId) return;
+    const type = vaultEntryType(entry);
+    panel.replaceChildren();
+    const title = document.createElement('h3');
+    title.textContent = `${entry.fileNumber} · ${type.label}`;
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'link-button';
+    close.textContent = '关闭';
+    close.addEventListener('click', () => { state.vaultDetailId = null; panel.classList.add('hidden'); panel.parentElement.classList.remove('with-detail'); renderVaultRows(); });
+    const head = document.createElement('div');
+    head.style.display = 'flex';
+    head.style.justifyContent = 'space-between';
+    head.append(title, close);
+    const dl = document.createElement('dl');
+    const add = (key, value) => {
+      const dt = document.createElement('dt'); dt.textContent = key;
+      const dd = document.createElement('dd'); dd.textContent = value;
+      dl.append(dt, dd);
+    };
+    add('名称', entry.name);
+    add('创建时间', new Date(entry.createdAt).toLocaleString('zh-CN'));
+    add('字符数', (entry.text || '').length.toLocaleString('zh-CN'));
+    add('隐藏处数', String(entry.audit?.findingCount ?? ''));
+    if (entry.mapping?.length) {
+      const counts = new Map();
+      for (const item of entry.mapping) counts.set(TYPE_LABELS[item.type] || item.type, (counts.get(TYPE_LABELS[item.type] || item.type) || 0) + 1);
+      add('代号', `${entry.mapping.length} 个：${[...counts].map(([name, count]) => `${name} ${count}`).join('、')}`);
+    }
+    panel.append(head, dl);
+    const files = [...String(entry.text || '').matchAll(/^【文件 (\d+)\/(\d+)：(.+)】$/gmu)].map((match) => `${match[1]}. ${match[3]}`);
+    if (files.length) {
+      const label = document.createElement('strong');
+      label.textContent = `包含 ${files.length} 个文件`;
+      const list = document.createElement('ul');
+      for (const file of files) list.append(Object.assign(document.createElement('li'), { textContent: file }));
+      panel.append(label, list);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'detail-actions';
+    const primary = document.createElement('button');
+    primary.type = 'button';
+    primary.className = 'button button-dark button-small';
+    primary.textContent = entry.kind === 'reversible-map' ? '去逆脱敏 →' : '载入到文件脱敏';
+    primary.addEventListener('click', () => loadVaultEntry(entry.id));
+    actions.append(primary);
+    for (const attachment of entry.attachments || []) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button button-ghost button-small';
+      button.textContent = `下载${attachment.role === 'original' ? '原件' : attachment.role === 'redacted-copy' ? '脱敏副本' : '附件'}`;
+      button.addEventListener('click', () => exportStoredAttachment(entry, attachment));
+      actions.append(button);
+    }
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'button button-ghost button-small';
+    remove.textContent = '删除这条…';
+    remove.addEventListener('click', () => openVaultDeleteDialog(new Map([[entry.id, entry.fileNumber]])));
+    actions.append(remove);
+    panel.append(actions);
+  } catch (error) {
+    panel.replaceChildren(Object.assign(document.createElement('div'), { className: 'column-meta', textContent: `读取失败：${vaultErrorMessage(error)}` }));
+  }
+}
+
+let vaultDeleteTargets = null;
+function openVaultDeleteDialog(targets = state.vaultSelected) {
+  if (!state.vault || !targets.size) return;
+  vaultDeleteTargets = new Map(targets);
+  const numbers = [...vaultDeleteTargets.values()];
+  elements.vaultDeleteTitle.textContent = `删除 ${numbers.length} 条记录？`;
+  elements.vaultDeleteList.textContent = numbers.length > 30 ? `${numbers.slice(0, 30).join('、')} … 等 ${numbers.length} 条` : numbers.join('、');
+  elements.vaultDeleteConfirmButton.textContent = `删除 ${numbers.length} 条`;
+  elements.vaultDeleteDialog.showModal();
+  elements.vaultDeleteCancelButton.focus();
+}
+
+async function confirmVaultDelete() {
+  if (!state.vault || !vaultDeleteTargets?.size) return;
+  const ids = [...vaultDeleteTargets.keys()];
+  elements.vaultDeleteDialog.close();
+  try {
+    const value = await window.veilforge.deleteVaultEntries(state.vault.token, ids);
+    for (const id of ids) state.vaultSelected.delete(id);
+    if (ids.includes(state.restoreEntry?.id)) clearRestoreSession();
+    if (ids.includes(state.vaultDetailId)) { state.vaultDetailId = null; elements.vaultDetail.classList.add('hidden'); elements.vaultDetail.parentElement.classList.remove('with-detail'); }
+    await applyVaultStateAndFilters(value);
+    elements.vaultCompactHintText.textContent = `已删除 ${value.deletion.deleted} 条。旧的加密内容仍在仓库文件里，建议压缩回收空间，彻底清除。`;
+    elements.vaultCompactHint.classList.remove('hidden');
+    showToast(`已删除 ${value.deletion.deleted} 条记录`);
+  } catch (error) {
+    showToast(`删除失败：${vaultErrorMessage(error)}`, 'error');
+  } finally {
+    vaultDeleteTargets = null;
+  }
+}
+
+async function backupSelectedRecords(targets = state.vaultSelected) {
+  if (!state.vault || !targets.size) return false;
+  const password = await requestVaultPassword('backup');
+  if (!password) return false;
+  try {
+    const value = await window.veilforge.backupVault(state.vault.token, password, [...targets.keys()]);
+    if (value?.canceled) return false;
+    await applyVaultStateAndFilters(value);
+    showToast(`已导出 ${value.backup.records ?? value.backup.entries} 条记录的加密备份：${value.backup.name}`);
+    return true;
+  } catch (error) {
+    showToast(`备份失败：${vaultErrorMessage(error)}`, 'error');
+    return false;
   }
 }
 
@@ -2550,6 +2742,35 @@ for (const [element, field] of [
     scheduleVaultFilterRefresh();
   });
 }
+elements.vaultSelectPage.addEventListener('change', () => {
+  for (const entry of state.vault?.entries || []) {
+    if (elements.vaultSelectPage.checked) state.vaultSelected.set(entry.id, entry.fileNumber); else state.vaultSelected.delete(entry.id);
+  }
+  renderVaultRows();
+});
+elements.vaultSelectAllButton.addEventListener('click', async () => {
+  if (!state.vault) return;
+  try {
+    const ids = await window.veilforge.listVaultIds(state.vault.token, state.vaultFilters);
+    for (const item of ids) state.vaultSelected.set(item.id, item.fileNumber);
+    renderVaultRows();
+  } catch (error) {
+    showToast(`全选失败：${vaultErrorMessage(error)}`, 'error');
+  }
+});
+elements.vaultClearSelectionButton.addEventListener('click', () => { state.vaultSelected.clear(); renderVaultRows(); });
+elements.vaultDeleteSelectedButton.addEventListener('click', () => openVaultDeleteDialog());
+elements.vaultBackupSelectedButton.addEventListener('click', () => backupSelectedRecords());
+elements.vaultDeleteCancelButton.addEventListener('click', () => { vaultDeleteTargets = null; elements.vaultDeleteDialog.close(); });
+elements.vaultDeleteDialog.addEventListener('cancel', () => { vaultDeleteTargets = null; });
+elements.vaultDeleteConfirmButton.addEventListener('click', confirmVaultDelete);
+elements.vaultDeleteBackupButton.addEventListener('click', async () => {
+  const targets = vaultDeleteTargets;
+  elements.vaultDeleteDialog.close();
+  if (await backupSelectedRecords(targets)) openVaultDeleteDialog(targets);
+});
+elements.vaultCompactNowButton.addEventListener('click', () => { elements.vaultCompactHint.classList.add('hidden'); elements.vaultCompactButton.click(); });
+elements.vaultCompactLaterButton.addEventListener('click', () => elements.vaultCompactHint.classList.add('hidden'));
 elements.vaultFilterClearButton.addEventListener('click', () => {
   state.vaultFilters = { query: '', kind: 'all', dateFrom: '', dateTo: '' };
   refreshVaultEntries().catch((error) => showToast(`清除筛选失败：${vaultErrorMessage(error)}`, 'error'));
@@ -2658,9 +2879,17 @@ function renderRestoreState() {
   } else {
     elements.restoreEntryLabel.textContent = '还没有选择文件：导入 AI 返回的文件会按编号自动找到对应记录，也可以在下面查找。';
   }
-  elements.restoreUnlockButton.classList.toggle('hidden', Boolean(state.vault));
-  elements.restoreSearch.disabled = !state.vault;
-  elements.restoreSearch.placeholder = state.vault ? '或按文件编号、文件名查找，例如 000001' : '文件仓库已锁定，先解锁才能查找';
+  elements.restoreUnlockButton.classList.add('hidden');
+  elements.restorePickerButton.replaceChildren();
+  if (entry?.mapping) {
+    const type = vaultEntryType(entry);
+    elements.restorePickerButton.append(`${entry.fileNumber || ''} · ${entry.name || ''} · ${type.label} · ${shortDate(entry.createdAt)}`);
+  } else {
+    const placeholder = document.createElement('span');
+    placeholder.className = 'placeholder';
+    placeholder.textContent = state.vault ? '点这里选择仓库里的记录（也可以直接导入返回文件，按编号自动选中）' : '文件仓库已锁定：点这里解锁后选择记录';
+    elements.restorePickerButton.append(placeholder);
+  }
   const file = state.restoreFile;
   elements.restoreFileState.textContent = !file ? ''
     : file.edited ? `已导入 ${file.name}，内容被手动修改过，将导出为 TXT`
@@ -2692,37 +2921,77 @@ function detectFileNumber(name, text) {
 }
 
 let restoreSearchTimer = 0;
-async function runRestoreSearch() {
+let restorePickerCursor = null;
+async function runRestoreSearch({ append = false } = {}) {
   const query = elements.restoreSearch.value.trim();
-  elements.restoreSearchResults.replaceChildren();
-  if (!state.vault || !query) return;
+  if (!append) { elements.restoreSearchResults.replaceChildren(); restorePickerCursor = null; }
+  elements.restoreSearchResults.querySelector('.show-more')?.remove();
+  if (!state.vault) return;
   try {
     const value = await window.veilforge.listVaultEntries(state.vault.token, {
-      pageSize: 8,
+      cursor: append ? restorePickerCursor : null,
+      pageSize: 30,
       filters: { query, kind: 'reversible-map', dateFrom: '', dateTo: '' }
     });
-    if (!value.entries.length) {
+    if (!value.entries.length && !append) {
       const empty = document.createElement('span');
-      empty.className = 'muted';
-      empty.textContent = '没有找到匹配的可逆记录';
+      empty.className = 'column-meta';
+      empty.textContent = query ? '没有找到匹配的可逆记录' : '仓库里还没有可逆记录';
       elements.restoreSearchResults.append(empty);
       return;
     }
     for (const entry of value.entries) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = `${entry.fileNumber} · ${entry.name}`;
-      button.addEventListener('click', async () => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = `record-option ${state.restoreEntry?.id === entry.id ? 'current' : ''}`;
+      option.setAttribute('role', 'option');
+      const type = vaultEntryType(entry);
+      const number = document.createElement('strong');
+      number.textContent = entry.fileNumber;
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = entry.name;
+      name.title = entry.name;
+      const badge = document.createElement('span');
+      badge.className = `vault-type ${type.key}`;
+      badge.textContent = type.label;
+      const date = document.createElement('span');
+      date.className = 'date';
+      date.textContent = shortDate(entry.createdAt);
+      option.append(number, name, badge, date);
+      option.addEventListener('click', async () => {
+        closeRestorePicker();
         await loadVaultEntry(entry.id, { keepInput: true });
-        elements.restoreSearchResults.replaceChildren();
-        elements.restoreSearch.value = '';
         if (elements.restoreInput.value.trim()) runRestore();
       });
-      elements.restoreSearchResults.append(button);
+      elements.restoreSearchResults.append(option);
+    }
+    restorePickerCursor = value.nextCursor;
+    if (value.hasMore) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'show-more';
+      more.textContent = `加载更多（共 ${value.filteredTotal} 条）`;
+      more.addEventListener('click', () => runRestoreSearch({ append: true }));
+      elements.restoreSearchResults.append(more);
     }
   } catch (error) {
-    showToast(`查找失败：${vaultErrorMessage(error)}`, 'error');
+    showToast(`读取记录失败：${vaultErrorMessage(error)}`, 'error');
   }
+}
+
+function closeRestorePicker() {
+  elements.restorePickerPop.classList.add('hidden');
+  elements.restorePickerButton.setAttribute('aria-expanded', 'false');
+}
+
+async function openRestorePicker() {
+  if (!state.vault && !(await openVaultFlow())) return;
+  elements.restorePickerPop.classList.remove('hidden');
+  elements.restorePickerButton.setAttribute('aria-expanded', 'true');
+  elements.restoreSearch.value = '';
+  await runRestoreSearch();
+  elements.restoreSearch.focus();
 }
 
 // ---------- 整个文件夹还原 ----------
@@ -2958,7 +3227,14 @@ elements.restoreFolderButton.addEventListener('click', async () => {
 elements.restoreUnlockButton.addEventListener('click', async () => { if (await openVaultFlow()) renderRestoreState(); });
 elements.restoreSearch.addEventListener('input', () => {
   window.clearTimeout(restoreSearchTimer);
-  restoreSearchTimer = window.setTimeout(runRestoreSearch, 250);
+  restoreSearchTimer = window.setTimeout(() => runRestoreSearch(), 250);
+});
+elements.restorePickerButton.addEventListener('click', () => {
+  if (elements.restorePickerPop.classList.contains('hidden')) openRestorePicker(); else closeRestorePicker();
+});
+elements.restoreSearch.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeRestorePicker(); });
+document.addEventListener('click', (event) => {
+  if (!elements.restorePicker.contains(event.target)) closeRestorePicker();
 });
 elements.restoreInput.addEventListener('input', () => {
   if (state.restoreFile && !state.restoreFile.edited && elements.restoreInput.value !== state.restoreFile.text) {

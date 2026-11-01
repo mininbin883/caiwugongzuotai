@@ -57,6 +57,8 @@ const {
   readVaultEntry,
   exportVaultAttachment,
   deleteVaultEntry,
+  deleteVaultEntries,
+  listVaultEntryIds,
   compactVault,
   vaultStatistics,
   exportVaultBackup,
@@ -461,6 +463,17 @@ async function deleteFromVault(event, payload) {
   return { ...publicVaultState(token, vaultSession), deletion };
 }
 
+async function deleteManyFromVault(event, payload) {
+  const { token, vaultSession } = requireVault(payload?.token, event.sender.id);
+  const deletion = await deleteVaultEntries(vaultSession.context, payload?.ids);
+  return { ...publicVaultState(token, vaultSession), deletion };
+}
+
+function listVaultIds(event, payload) {
+  const { vaultSession } = requireVault(payload?.token, event.sender.id);
+  return listVaultEntryIds(vaultSession.context, payload?.filters);
+}
+
 async function compactCurrentVault(event, payload) {
   const { token, vaultSession } = requireVault(payload?.token, event.sender.id);
   const compaction = await compactVault(vaultSession.context);
@@ -476,13 +489,14 @@ async function rotateVault(event, payload) {
 async function backupVaultFromDialog(event, payload) {
   const { token, vaultSession } = requireVault(payload?.token, event.sender.id);
   const baseName = path.basename(vaultSession.context.filePath, path.extname(vaultSession.context.filePath));
+  const entryIds = Array.isArray(payload?.entryIds) ? payload.entryIds.map(String).slice(0, 5000) : null;
   const result = await dialog.showSaveDialog({
-    title: '导出墨隐加密备份',
-    defaultPath: `${baseName}-备份.miyin-backup`,
+    title: entryIds?.length ? `导出所选 ${entryIds.length} 条记录的加密备份` : '导出墨隐加密备份',
+    defaultPath: `${baseName}-${entryIds?.length ? `所选${entryIds.length}条-` : ''}备份.miyin-backup`,
     filters: [{ name: '墨隐加密备份', extensions: ['miyin-backup'] }]
   });
   if (result.canceled || !result.filePath) return { canceled: true };
-  const backup = await exportVaultBackup(vaultSession.context, result.filePath, payload?.password);
+  const backup = await exportVaultBackup(vaultSession.context, result.filePath, payload?.password, { entryIds });
   await appendVaultActivity(vaultSession.context, {
     action: 'export',
     name: backup.name,
@@ -2661,6 +2675,8 @@ ipcMain.handle('veilforge:vault-list', guardWithEvent(listVault));
 ipcMain.handle('veilforge:vault-read', guardWithEvent(readFromVault));
 ipcMain.handle('veilforge:vault-export-attachment', guardWithEvent(exportAttachmentFromVault));
 ipcMain.handle('veilforge:vault-delete', guardWithEvent(deleteFromVault));
+ipcMain.handle('veilforge:vault-delete-many', guardWithEvent(deleteManyFromVault));
+ipcMain.handle('veilforge:vault-list-ids', guardWithEvent(listVaultIds));
 ipcMain.handle('veilforge:vault-compact', guardWithEvent(compactCurrentVault));
 ipcMain.handle('veilforge:vault-backup', guardWithEvent(backupVaultFromDialog));
 ipcMain.handle('veilforge:vault-import', guardWithEvent(importVaultFromDialog));

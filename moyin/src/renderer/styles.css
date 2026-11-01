@@ -418,3 +418,62 @@ body.has-document .main-panel { overflow: visible; }
 .settings-apply strong { font-size: 13px; }
 .batch-mode-hint { margin: 6px 0 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .batch-mode { font-size: 12px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
+
+/* ---------- 仓库：主区域表格 ---------- */
+.vault-panel { margin-top: 18px; }
+.vault-panel-locked { padding: 24px; border: 1px dashed var(--line); border-radius: 14px; color: var(--muted); font-size: 13px; }
+.vault-panel-body { display: grid; gap: 10px; }
+.vault-panel-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.vault-panel-toolbar .vault-explorer-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1 1 auto; }
+.vault-panel-toolbar input[type=search] { min-width: 240px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.vault-page-summary { color: var(--muted); font-size: 12px; }
+.vault-table-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
+.vault-table-wrap.with-detail { grid-template-columns: minmax(0, 1fr) 360px; }
+.vault-table { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow: hidden; }
+.vault-row { display: grid; grid-template-columns: 36px 100px minmax(0, 1fr) 90px 92px 70px 150px; gap: 8px; align-items: center; padding: 9px 12px; border-top: 1px solid var(--line); font-size: 12.5px; cursor: pointer; }
+.vault-row:first-child { border-top: 0; }
+.vault-row-head { background: #f3f1ea; color: var(--muted); font-weight: 650; cursor: default; position: sticky; top: 0; }
+.vault-row:hover:not(.vault-row-head) { background: #f8f6f0; }
+.vault-row.selected { background: #eef5ec; }
+.vault-row.active { box-shadow: inset 3px 0 0 var(--green); }
+.vault-row .num { text-align: right; }
+.vault-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.vault-row .actions { display: flex; gap: 6px; justify-content: flex-end; }
+.vault-check { display: flex; align-items: center; justify-content: center; }
+.vault-type { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: #eef1ec; color: #4c5a52; }
+.vault-type.screening { background: #e7f0fb; color: #2a5a8a; }
+.vault-type.batch { background: #f2ecdf; color: #6b5226; }
+.vault-type.text { background: #f4e9e7; color: #8a3f35; }
+.vault-entry-empty { padding: 20px; color: var(--muted); font-size: 13px; }
+.vault-selection-bar { position: sticky; bottom: 0; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 -6px 18px rgba(0,0,0,.06); font-size: 13px; }
+.vault-selection-bar .spacer { flex: 1; }
+.button-danger { background: #8a3f35; color: #fff; border: 0; }
+.button-danger:hover { background: #73332b; }
+.vault-detail { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 16px; display: grid; gap: 10px; font-size: 12.5px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; }
+.vault-detail h3 { margin: 0; font-size: 16px; }
+.vault-detail dl { display: grid; grid-template-columns: 70px 1fr; gap: 4px 10px; margin: 0; }
+.vault-detail dt { color: var(--muted); }
+.vault-detail dd { margin: 0; word-break: break-all; }
+.vault-detail ul { margin: 0; padding-left: 18px; max-height: 220px; overflow: auto; }
+.vault-detail .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.vault-compact-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; background: #fff3d6; border: 1px solid #e8c983; font-size: 12.5px; color: #7a4d10; }
+.vault-delete-list { max-height: 160px; overflow: auto; font-family: "Cascadia Mono", monospace; font-size: 12px; color: var(--ink) !important; }
+.vault-delete-warning { color: #8a3f35 !important; }
+/* 逆脱敏：记录下拉 */
+.record-picker { position: relative; width: 100%; }
+.record-picker-button { width: 100%; text-align: left; padding: 9px 34px 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font-size: 13px; cursor: pointer; position: relative; }
+.record-picker-button::after { content: '▾'; position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+.record-picker-button .placeholder { color: var(--muted); }
+.record-picker-pop { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 40px rgba(0,0,0,.14); padding: 8px; display: grid; gap: 6px; }
+.record-picker-pop input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; }
+.record-picker-list { max-height: 320px; overflow: auto; display: grid; gap: 2px; }
+.record-option { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; text-align: left; padding: 7px 8px; border: 0; border-radius: 8px; background: none; font-size: 12.5px; cursor: pointer; }
+.record-option:hover, .record-option.current { background: #eef5ec; }
+.record-option .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.record-option .date { color: var(--muted); font-size: 11.5px; }
+.vault-panel .vault-explorer-controls { display: flex !important; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
+.vault-panel .vault-explorer-controls input[type=search] { flex: 1 1 260px; width: auto; }
+.vault-panel .vault-explorer-controls select { width: auto; flex: 0 0 auto; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.vault-panel .vault-explorer-controls label { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.vault-panel .vault-explorer-controls input[type=date] { width: auto; padding: 6px 6px; border: 1px solid var(--line); border-radius: 8px; }
+.vault-panel .vault-entry-list { display: block; max-height: calc(100vh - 300px); min-height: 120px; overflow-y: auto; gap: 0; }

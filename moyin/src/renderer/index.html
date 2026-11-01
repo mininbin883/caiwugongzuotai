@@ -177,20 +177,6 @@
               <button id="vaultCompactButton" class="button button-ghost button-small">压缩回收空间</button>
               <span id="vaultStorageStats" class="vault-storage-stats"></span>
             </div>
-            <div class="vault-entry-heading"><span>仓库内容</span><span id="vaultPageSummary"></span></div>
-            <div class="vault-explorer-controls">
-              <input id="vaultSearchInput" type="search" maxlength="120" placeholder="搜索编号、名称或敏感类型" aria-label="搜索仓库">
-              <select id="vaultKindFilter" aria-label="仓库记录类型">
-                <option value="all">全部类型</option>
-                <option value="redacted-text">脱敏文本</option>
-                <option value="reversible-map">可逆记录</option>
-              </select>
-              <label>从<input id="vaultDateFrom" type="date" aria-label="开始日期"></label>
-              <label>至<input id="vaultDateTo" type="date" aria-label="结束日期"></label>
-              <button id="vaultFilterClearButton" class="button button-ghost button-small" type="button">清除筛选</button>
-            </div>
-            <div id="vaultEntryList" class="vault-entry-list"></div>
-            <button id="vaultLoadMoreButton" class="button button-ghost button-small hidden">加载更多</button>
           </div>
         </section>
 
@@ -237,6 +223,50 @@
           </li>
           <li class="workflow-status"><strong id="workflowSummary">当前：导入文档</strong></li>
         </ol>
+
+        <section id="vaultPanel" class="vault-panel module-hidden" aria-label="仓库记录">
+          <div id="vaultPanelLocked" class="vault-panel-locked">文件仓库已锁定。请在左侧打开仓库，或新建一个仓库。</div>
+          <div id="vaultPanelBody" class="vault-panel-body hidden">
+            <div class="vault-panel-toolbar">
+              <div class="vault-explorer-controls">
+                <input id="vaultSearchInput" type="search" maxlength="120" placeholder="搜索编号、名称或敏感类型" aria-label="搜索仓库">
+                <select id="vaultKindFilter" aria-label="仓库记录类型">
+                  <option value="all">全部类型</option>
+                  <option value="redacted-text">脱敏文本</option>
+                  <option value="reversible-map">可逆记录</option>
+                </select>
+                <label>从<input id="vaultDateFrom" type="date" aria-label="开始日期"></label>
+                <label>至<input id="vaultDateTo" type="date" aria-label="结束日期"></label>
+                <button id="vaultFilterClearButton" class="button button-ghost button-small" type="button">清除筛选</button>
+              </div>
+              <span id="vaultPageSummary" class="vault-page-summary"></span>
+            </div>
+            <div id="vaultCompactHint" class="vault-compact-hint hidden" role="status">
+              <span id="vaultCompactHintText">已删除记录。旧的加密内容仍在仓库文件里，建议压缩回收空间。</span>
+              <button id="vaultCompactNowButton" type="button" class="button button-dark button-small">立即压缩</button>
+              <button id="vaultCompactLaterButton" type="button" class="button button-ghost button-small">以后再说</button>
+            </div>
+            <div class="vault-table-wrap">
+              <div class="vault-table">
+                <div class="vault-row vault-row-head">
+                  <label class="vault-check"><input id="vaultSelectPage" type="checkbox" aria-label="选择本页"></label>
+                  <span>编号</span><span>名称</span><span>类型</span><span>日期</span><span class="num">代号</span><span>操作</span>
+                </div>
+                <div id="vaultEntryList" class="vault-entry-list"></div>
+              </div>
+              <aside id="vaultDetail" class="vault-detail hidden" aria-live="polite"></aside>
+            </div>
+            <button id="vaultLoadMoreButton" class="button button-ghost button-small hidden">加载更多</button>
+            <div id="vaultSelectionBar" class="vault-selection-bar hidden">
+              <span id="vaultSelectionText">已选 0 条</span>
+              <button id="vaultSelectAllButton" type="button" class="link-button">全选筛选结果</button>
+              <button id="vaultClearSelectionButton" type="button" class="link-button">取消选择</button>
+              <span class="spacer"></span>
+              <button id="vaultBackupSelectedButton" type="button" class="button button-ghost button-small">导出所选备份…</button>
+              <button id="vaultDeleteSelectedButton" type="button" class="button button-danger button-small">删除所选…</button>
+            </div>
+          </div>
+        </section>
 
         <section id="batchPanel" class="batch-panel hidden module-hidden" aria-label="批处理队列">
           <div class="batch-heading">
@@ -377,9 +407,14 @@
             </label>
           </div>
           <div class="restore-finder">
-            <input id="restoreSearch" type="search" maxlength="80" placeholder="或按文件编号、文件名查找，例如 000001" aria-label="查找仓库记录">
+            <div id="restorePicker" class="record-picker">
+              <button id="restorePickerButton" type="button" class="record-picker-button" aria-haspopup="listbox" aria-expanded="false"><span class="placeholder">选择仓库里的记录（编号 · 名称）</span></button>
+              <div id="restorePickerPop" class="record-picker-pop hidden">
+                <input id="restoreSearch" type="search" maxlength="80" placeholder="输入编号或名称筛选，例如 000200 或 批次" aria-label="筛选仓库记录">
+                <div id="restoreSearchResults" class="record-picker-list" role="listbox"></div>
+              </div>
+            </div>
             <button id="restoreUnlockButton" type="button" class="button button-ghost button-small hidden">解锁文件仓库</button>
-            <div id="restoreSearchResults" class="restore-search-results"></div>
           </div>
           <div id="restoreDrop" class="restore-drop">
             <span>把 AI 返回的文件或整个文件夹（如“筛查结果”）拖到这里，或</span>
@@ -428,6 +463,19 @@
     </form>
   </dialog>
 
+  <dialog id="vaultDeleteDialog" class="vault-dialog">
+    <form method="dialog">
+      <div class="section-kicker">删除仓库记录</div>
+      <h2 id="vaultDeleteTitle">删除 0 条记录？</h2>
+      <p id="vaultDeleteList" class="vault-delete-list"></p>
+      <p class="vault-delete-warning">删除后，已经发给 AI 的这些副本就再也不能换回原文了；你的原文件不受影响。如果以后还要逆脱敏，请先导出所选记录的备份。</p>
+      <div class="vault-dialog-actions">
+        <button id="vaultDeleteBackupButton" type="button" class="button button-ghost">先导出所选备份</button>
+        <button id="vaultDeleteCancelButton" type="button" class="button button-ghost" autofocus>取消</button>
+        <button id="vaultDeleteConfirmButton" type="button" class="button button-danger">删除</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="vaultGateDialog" class="vault-dialog">
     <form method="dialog">
       <div class="section-kicker">导出前</div>
