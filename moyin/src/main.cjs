@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, Menu, session } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
@@ -48,6 +48,8 @@ const { loadNerModel } = require('./services/ner-service.cjs');
 const { findFirstModelPack } = require('./services/model-pack-service.cjs');
 const { inspectRapidOcrBackend } = require('./services/rapidocr-service.cjs');
 const { allowedSenderEvent } = require('./services/sender-guard.cjs');
+const { createLicenseStore } = require('./services/license-service.cjs');
+const RELEASE_INFO = require('./release-info.json');
 const {
   createVault,
   openVault,
@@ -179,6 +181,49 @@ app.commandLine.appendSwitch('disable-sync');
 
 function allowedSender(event) {
   return allowedSenderEvent(event, ENTRY);
+}
+
+// ---------- 授权 ----------
+let licenseStoreInstance = null;
+function licenseStore() {
+  licenseStoreInstance ||= createLicenseStore({ dir: app.getPath('userData'), buildTime: Date.parse(RELEASE_INFO.releasedAt) || 0 });
+  return licenseStoreInstance;
+}
+
+function licenseStatus() {
+  return {
+    ...licenseStore().status(),
+    version: app.getVersion(),
+    publisher: RELEASE_INFO.publisher,
+    contacts: RELEASE_INFO.contacts,
+    howToGet: RELEASE_INFO.howToGet
+  };
+}
+
+function importLicenseText(_event, payload) {
+  licenseStore().importLicense(String(payload?.text || ''));
+  return licenseStatus();
+}
+
+async function readLicenseFile() {
+  const result = await dialog.showOpenDialog({
+    title: '选择授权码文件',
+    properties: ['openFile'],
+    filters: [{ name: '授权码文件', extensions: ['txt'] }, { name: '所有文件', extensions: ['*'] }]
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const stat = await fs.stat(result.filePaths[0]);
+  if (!stat.isFile() || stat.size > 64 * 1024) throw new Error('LOCAL_LICENSE_INVALID');
+  const text = await fs.readFile(result.filePaths[0], 'utf8');
+  const code = text.match(/MY1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/u)?.[0];
+  if (!code) throw new Error('LOCAL_LICENSE_INVALID');
+  return { text: code };
+}
+
+function copyDeviceCode() {
+  const device = licenseStore().deviceCode();
+  clipboard.writeText(device);
+  return { device };
 }
 
 function guard(handler) {
@@ -1001,6 +1046,7 @@ function sanitizeAnalysisOptions(value) {
 }
 
 async function exportCompletedBatch(event, payload) {
+  licenseStore().assertCanExport();
   if (batchExportSessions.has(event.sender.id)) throw new Error('LOCAL_BATCH_EXPORT_ACTIVE');
   const jobs = batchQueue.list((job) => job.metadata.ownerId === event.sender.id && job.status === 'done' && job.result);
   if (!jobs.length) throw new Error('LOCAL_BATCH_EXPORT_EMPTY');
@@ -1150,6 +1196,8 @@ function exportFileName(payload, fallbackBase, extension) {
 
 async function saveExport(event, payload) {
   if (!payload || typeof payload !== 'object') throw new Error('LOCAL_EXPORT_INVALID');
+  // 导出新的脱敏副本需要有效授权；识别、仓库、逆脱敏、备份不受限制。
+  licenseStore().assertCanExport();
   if (payload.kind === 'csv') {
     const csvSession = csvSessions.get(String(payload.csvToken || ''));
     if (!csvSession) throw new Error('LOCAL_CSV_SESSION_EXPIRED');
@@ -2672,6 +2720,10 @@ ipcMain.handle('veilforge:pick-batch-documents', guardWithEvent(chooseBatchDocum
 ipcMain.handle('veilforge:pick-image-for-text', guardWithEvent(chooseImageForText));
 ipcMain.handle('veilforge:open-encrypted-pdf', guardWithEvent(openEncryptedDocument));
 ipcMain.handle('veilforge:export', guardWithEvent(saveExport));
+ipcMain.handle('veilforge:license-status', guard(licenseStatus));
+ipcMain.handle('veilforge:license-import', guardWithEvent(importLicenseText));
+ipcMain.handle('veilforge:license-read-file', guard(readLicenseFile));
+ipcMain.handle('veilforge:license-copy-device', guard(copyDeviceCode));
 ipcMain.handle('veilforge:ocr-correct', guardWithEvent(correctOcr));
 ipcMain.handle('veilforge:office-restore', guardWithEvent(restoreOfficeFromDialog));
 ipcMain.handle('veilforge:restore-open', guardWithEvent(openReturnedDocument));

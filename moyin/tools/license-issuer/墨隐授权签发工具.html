@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'">
+<title>墨隐授权签发工具</title>
+<style>
+  :root { --ink:#18211e; --muted:#5d6762; --green:#174c3a; --line:#d6d2c6; --panel:#fffdf8; --bg:#f2efe7; --bad:#8a3f35; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 "Microsoft YaHei UI", "PingFang SC", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 13px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+  h2 { margin: 0 0 12px; font-size: 16px; }
+  label { display: block; color: var(--muted); font-size: 12px; font-weight: 700; margin: 10px 0 4px; }
+  input, select, textarea { width: 100%; padding: 9px 10px; border: 1px solid #cbc7bc; border-radius: 8px; background: #fff; color: var(--ink); font: inherit; }
+  textarea { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; word-break: break-all; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  button { padding: 9px 16px; border: 1px solid var(--green); border-radius: 8px; background: var(--green); color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+  button.ghost { background: #fff; color: var(--green); }
+  button:disabled { opacity: .5; cursor: default; }
+  .ok { color: var(--green); font-weight: 700; }
+  .err { color: var(--bad); font-weight: 700; min-height: 1.4em; }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 4px; text-align: left; vertical-align: top; }
+  .wrap { overflow-x: auto; }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>墨隐授权签发工具</h1>
+  <p class="sub">只在本机运行，不联网。私钥只在打开的这个页面里使用，不会保存或上传。请把私钥文件和本工具放在只有你能访问的地方，<b>不要发给任何人</b>。</p>
+
+  <section>
+    <h2>① 载入私钥</h2>
+    <label for="keyFile">私钥文件（k1-private.pem；k2 为离线备用，只在 k1 泄露后使用）</label>
+    <input id="keyFile" type="file" accept=".pem,.txt">
+    <p id="keyState" class="hint">尚未载入。</p>
+  </section>
+
+  <section>
+    <h2>② 填写授权信息</h2>
+    <label for="device">客户发来的设备码</label>
+    <input id="device" placeholder="MY-ABCDE-FGHJK-LMNPQ-RSTUV" autocomplete="off" spellcheck="false">
+    <div class="grid">
+      <div>
+        <label for="customer">客户名称（会写进授权码，最多 60 字）</label>
+        <input id="customer" maxlength="60" placeholder="例如：某某建筑工程有限公司">
+      </div>
+      <div>
+        <label for="plan">套餐</label>
+        <select id="plan">
+          <option value="trial">7 天试用</option>
+          <option value="monthly">月付（31 天）</option>
+          <option value="quarterly">季付（92 天）</option>
+          <option value="yearly" selected>年付（366 天）</option>
+          <option value="perpetual">永久</option>
+        </select>
+      </div>
+      <div>
+        <label for="start">生效日期（续期时可填当前授权的到期日）</label>
+        <input id="start" type="date">
+      </div>
+      <div id="updatesBox" hidden>
+        <label for="updatesYears">永久授权：免费升级年数</label>
+        <input id="updatesYears" type="number" min="1" max="10" value="1">
+      </div>
+    </div>
+    <div class="row"><button id="issue" disabled>签发授权码</button></div>
+    <p id="error" class="err"></p>
+  </section>
+
+  <section>
+    <h2>③ 发给客户</h2>
+    <textarea id="output" rows="4" readonly placeholder="签发后显示授权码"></textarea>
+    <p id="summary" class="hint"></p>
+    <div class="row">
+      <button id="copy" class="ghost" disabled>复制授权码</button>
+      <button id="download" class="ghost" disabled>下载为 .txt（客户可“从文件导入”）</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>签发台账</h2>
+    <p class="hint">保存在本浏览器里。请定期“导出台账 CSV”另存备份（换浏览器或清理浏览数据会丢失）。</p>
+    <div class="row"><button id="exportLedger" class="ghost">导出台账 CSV</button></div>
+    <div class="wrap"><table><thead><tr><th>签发时间</th><th>编号</th><th>套餐</th><th>客户</th><th>设备码</th><th>到期</th></tr></thead><tbody id="ledger"></tbody></table></div>
+  </section>
+</main>
+<script>
+'use strict';
+const PLAN = {
+  trial: { label: '7天试用', days: 7, letter: 'T' },
+  monthly: { label: '月付', days: 31, letter: 'M' },
+  quarterly: { label: '季付', days: 92, letter: 'Q' },
+  yearly: { label: '年付', days: 366, letter: 'Y' },
+  perpetual: { label: '永久', days: null, letter: 'P' }
+};
+const DEVICE = /^MY-(?:[A-Z2-9]{5}-){3}[A-Z2-9]{5}$/;
+const LEDGER_KEY = 'moyin-issuer-ledger-v1';
+const $ = (id) => document.getElementById(id);
+let signingKey = null;
+let kid = 'k1';
+let last = null;
+
+function b64url(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function iso(ms) { return new Date(Math.floor(ms / 1000) * 1000).toISOString().replace('.000Z', 'Z'); }
+function today() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function readLedger() { try { return JSON.parse(localStorage.getItem(LEDGER_KEY) || '[]'); } catch { return []; } }
+function writeLedger(rows) { try { localStorage.setItem(LEDGER_KEY, JSON.stringify(rows)); } catch { /* 浏览器不允许时只是不保存 */ } }
+
+function renderLedger() {
+  const rows = readLedger().slice().reverse();
+  $('ledger').replaceChildren(...rows.map((row) => {
+    const tr = document.createElement('tr');
+    for (const value of [row.signedAt.slice(0, 16).replace('T', ' '), row.id, PLAN[row.plan]?.label || row.plan, row.customer, row.device, row.expires ? row.expires.slice(0, 10) : '永久']) {
+      const td = document.createElement('td');
+      td.textContent = value;
+      tr.append(td);
+    }
+    return tr;
+  }));
+}
+
+function save(name, text, type) {
+  const blob = new Blob(['﻿' + text], { type });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+$('start').value = today();
+$('plan').addEventListener('change', () => { $('updatesBox').hidden = $('plan').value !== 'perpetual'; });
+
+$('keyFile').addEventListener('change', async () => {
+  const file = $('keyFile').files[0];
+  signingKey = null;
+  $('issue').disabled = true;
+  if (!file) return;
+  try {
+    const pem = await file.text();
+    const body = pem.match(/-----BEGIN PRIVATE KEY-----([\s\S]+?)-----END PRIVATE KEY-----/);
+    if (!body) throw new Error('不是私钥文件');
+    const der = Uint8Array.from(atob(body[1].replace(/\s+/g, '')), (c) => c.charCodeAt(0));
+    signingKey = await crypto.subtle.importKey('pkcs8', der, { name: 'Ed25519' }, false, ['sign']);
+    kid = (file.name.match(/^(k\d+)/) || [])[1] || 'k1';
+    $('keyState').textContent = `已载入私钥 ${kid}（${file.name}）。`;
+    $('keyState').className = 'hint ok';
+    $('issue').disabled = false;
+  } catch (error) {
+    $('keyState').textContent = `载入失败：${error.message}。请用 Chrome 或 Edge 的最新版打开本工具。`;
+    $('keyState').className = 'err';
+  }
+});
+
+$('issue').addEventListener('click', async () => {
+  $('error').textContent = '';
+  try {
+    const device = $('device').value.trim().toUpperCase();
+    if (!DEVICE.test(device)) throw new Error('设备码格式不对，应形如 MY-ABCDE-FGHJK-LMNPQ-RSTUV');
+    const plan = $('plan').value;
+    const customer = $('customer').value.trim();
+    if (customer.length > 60) throw new Error('客户名称最多 60 字');
+    const now = Date.now();
+    const startDate = $('start').value ? new Date(`${$('start').value}T00:00:00+08:00`).getTime() : now;
+    const start = Math.max(startDate, now);
+    const id = `${PLAN[plan].letter}${new Date(now).toISOString().slice(0, 10).replace(/-/g, '')}-${b64url(crypto.getRandomValues(new Uint8Array(3))).toUpperCase().replace(/[^A-Z0-9]/g, '7').slice(0, 6)}`;
+    const payload = { v: 1, kid, id, plan, customer, device, issued: iso(start), expires: plan === 'perpetual' ? null : iso(start + PLAN[plan].days * 86400000) };
+    if (plan === 'perpetual') payload.updatesUntil = iso(start + Math.round((Number($('updatesYears').value) || 1) * 365.25 * 86400000));
+    const segment = b64url(new TextEncoder().encode(JSON.stringify(payload)));
+    const signature = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, signingKey, new TextEncoder().encode('moyin-license-v1\n' + segment)));
+    const code = `MY1.${segment}.${b64url(signature)}`;
+    last = { code, payload };
+    $('output').value = code;
+    $('summary').textContent = `编号 ${id} · ${PLAN[plan].label} · ${customer || '未填客户'} · 生效 ${payload.issued.slice(0, 10)} · 到期 ${payload.expires ? payload.expires.slice(0, 10) : '永久'}${payload.updatesUntil ? `（免费升级至 ${payload.updatesUntil.slice(0, 10)}）` : ''}`;
+    $('copy').disabled = false;
+    $('download').disabled = false;
+    writeLedger([...readLedger(), { signedAt: new Date(now).toISOString(), ...payload, code }]);
+    renderLedger();
+  } catch (error) {
+    $('error').textContent = error.message || String(error);
+  }
+});
+
+$('copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(last.code); } catch { $('output').select(); document.execCommand('copy'); }
+  $('summary').textContent += ' · 已复制';
+});
+
+$('download').addEventListener('click', () => {
+  const p = last.payload;
+  const text = [
+    '墨隐授权码（打开墨隐 → 右上角授权状态 → 粘贴，或点“从文件导入”选择本文件）', '', last.code, '',
+    `授权编号：${p.id}`, `套餐：${PLAN[p.plan].label}`, `客户：${p.customer || '—'}`, `设备码：${p.device}`,
+    `生效：${p.issued.slice(0, 10)}`, `到期：${p.expires ? p.expires.slice(0, 10) : '永久'}${p.updatesUntil ? `（免费升级至 ${p.updatesUntil.slice(0, 10)}）` : ''}`, ''
+  ].join('\r\n');
+  save(`墨隐授权码-${(p.customer || '客户').replace(/[\\/:*?"<>|]/g, '_')}-${PLAN[p.plan].label}-${p.id}.txt`, text, 'text/plain;charset=utf-8');
+});
+
+$('exportLedger').addEventListener('click', () => {
+  const cell = (value) => { const text = String(value ?? ''); return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text; };
+  const rows = readLedger().map((row) => [row.signedAt, row.id, PLAN[row.plan]?.label || row.plan, row.customer, row.device, row.issued, row.expires || '永久', row.updatesUntil || '', row.kid, row.code].map(cell).join(','));
+  save(`墨隐授权台账-${today()}.csv`, ['签发时间,授权编号,套餐,客户,设备码,生效,到期,免费升级至,公钥编号,授权码', ...rows].join('\r\n') + '\r\n', 'text/csv;charset=utf-8');
+});
+
+renderLedger();
+</script>
+</body>
+</html>

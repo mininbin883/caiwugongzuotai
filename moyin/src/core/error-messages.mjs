@@ -57,6 +57,15 @@ const MESSAGES = [
   [/LOCAL_BATCH_EXPORT_ACTIVE/, '批量导出正在进行，请等它完成。'],
   [/LOCAL_BATCH_(?:EMPTY|EXPORT_EMPTY)/, '没有可以导出的已完成任务。'],
   [/LOCAL_BATCH_CANCELED|LOCAL_JOB_ABORTED/, '已取消。'],
+  // 授权
+  [/LOCAL_LICENSE_REQUIRED/, '导出脱敏副本需要先激活。点右上角的授权状态，复制本机设备码发给我们领取授权码（可先领 7 天试用）。识别、文件仓库和逆脱敏不需要授权。'],
+  [/LOCAL_LICENSE_MACHINE_MISMATCH/, '这个授权码是签发给另一台电脑的（设备码不一致）。一个授权码只能用在一台电脑上；换电脑请把新电脑的设备码发给我们重新签发。'],
+  [/LOCAL_LICENSE_EXPIRED/, '授权已到期，暂停导出新的脱敏副本。请联系我们续期；文件仓库、逆脱敏和备份照常可用。'],
+  [/LOCAL_LICENSE_CLOCK/, '电脑时间比上次使用时早了很多（可能被调过），暂停导出。请把电脑时间改回正确的日期后重试。'],
+  [/LOCAL_LICENSE_UPDATES_EXPIRED/, '这个版本发布于你的永久授权免费升级期之后。请继续使用升级期内的版本，或联系我们续订升级服务。'],
+  [/LOCAL_LICENSE_PENDING/, '授权码还没到生效日期，到期前请勿删除；生效后即可导出。'],
+  [/LOCAL_LICENSE_DEVICE_UNAVAILABLE/, '读不到本机的设备编号，无法核对授权。请以普通方式重新打开墨隐；仍不行请联系我们。'],
+  [/LOCAL_LICENSE_INVALID/, '授权码无效：可能复制不完整或被改动过。请把收到的授权码完整复制（以 MY1. 开头），或用“从文件导入”。'],
   // 安全
   [/LOCAL_SENDER_DENIED/, '安全检查拦截了这次操作。请关闭墨隐后重新打开。']
 ];

@@ -486,3 +486,21 @@ body.has-document .main-panel { overflow: visible; }
 .batch-export-result .muted { color: var(--muted); }
 .batch-row.export-failed { border-color: #e2b4ad; background: #fbefed; }
 .batch-row.export-failed .batch-export-error { color: #8a3f35; font-weight: 650; }
+
+/* 授权 */
+.license-badge { align-self: center; flex: 0 1 auto; min-width: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; padding: 6px 11px; border: 1px solid #c9c4b6; border-radius: 99px; background: #fbfaf6; color: var(--muted); font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.license-badge.ok { border-color: #aec5b6; background: #e7f1e6; color: var(--green); }
+.license-badge.warn { border-color: #e2c48f; background: #fbf1dc; color: #7a5410; }
+.license-badge.bad { border-color: #e0b1a8; background: #f9e7e3; color: #8a3f35; }
+.license-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+.license-device-row { display: flex; gap: 8px; }
+.license-device-row .button { flex: 0 0 auto; white-space: nowrap; }
+.license-device-row input { font-family: "Cascadia Mono", Consolas, monospace; letter-spacing: .04em; }
+.license-dialog textarea { width: 100%; padding: 10px; resize: vertical; border: 1px solid #cbc7bc; border-radius: 9px; outline: none; background: white; color: var(--ink); font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; word-break: break-all; }
+.license-dialog textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(23,76,58,.1); }
+.license-status { padding: 10px 12px; border-radius: 10px; background: #eef4ee; color: var(--ink); font-size: 12px; line-height: 1.6; }
+.license-status.bad { background: #f9e7e3; }
+.license-howto summary { cursor: pointer; color: var(--green); font-size: 12px; font-weight: 700; }
+.license-howto ul { margin: 0 0 6px; padding-left: 18px; color: var(--ink); font-size: 12px; line-height: 1.7; }
+.license-publisher, .license-note { font-size: 11px !important; }
+@media (max-width: 560px) { .license-device-row { flex-direction: column; } .license-dialog .vault-dialog-actions { flex-wrap: wrap; } }

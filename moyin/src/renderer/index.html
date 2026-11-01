@@ -18,6 +18,7 @@
       </div>
       <div class="privacy-badge"><span></span>离线模式 · 内容不出本机</div>
       <div class="top-actions">
+        <button id="licenseBadge" class="license-badge" type="button" title="授权与激活">正在读取授权…</button>
         <button id="resetButton" class="button button-ghost">清空</button>
         <button id="openButton" class="button button-dark">导入文档</button>
       </div>
@@ -464,6 +465,34 @@
     </form>
   </dialog>
 
+  <dialog id="licenseDialog" class="vault-dialog license-dialog">
+    <form method="dialog">
+      <div class="section-kicker" id="licenseKicker">激活墨隐</div>
+      <h2 id="licenseTitle">输入授权码，开始使用</h2>
+      <p id="licenseIntro">导出脱敏副本需要授权码。复制下面的本机设备码，按“怎么领取”里的方式发给我们，领取授权码或 7 天试用码，粘贴后点“激活”。激活在本机核对，不需要联网。</p>
+      <div id="licenseStatusBox" class="license-status hidden"></div>
+      <label for="licenseDevice">本机设备码</label>
+      <div class="license-device-row">
+        <input id="licenseDevice" readonly value="" aria-label="本机设备码">
+        <button id="licenseCopyDevice" type="button" class="button button-ghost button-small">复制</button>
+      </div>
+      <label for="licenseCode">授权码或试用码</label>
+      <textarea id="licenseCode" rows="3" spellcheck="false" placeholder="粘贴以 MY1. 开头的授权码"></textarea>
+      <div id="licenseError" class="vault-dialog-error" role="alert"></div>
+      <details class="license-howto" open>
+        <summary>怎么领取</summary>
+        <p id="licenseHowTo"></p>
+        <ul id="licenseContacts"></ul>
+        <p id="licensePublisher" class="license-publisher"></p>
+      </details>
+      <p class="license-note">授权码里只有授权编号、套餐、有效期、设备码和客户名称，不含任何文件内容。一个授权码只能用在一台电脑上。没有授权或到期时，只暂停“导出新的脱敏副本”；识别预览、文件仓库、逆脱敏和备份照常可用（换电脑后可以先在“加密仓库”载入备份取回资料）。</p>
+      <div class="vault-dialog-actions">
+        <button id="licenseLater" type="button" class="button button-ghost">暂不激活</button>
+        <button id="licenseFromFile" type="button" class="button button-ghost">从文件导入</button>
+        <button id="licenseActivate" type="button" class="button button-dark">激活</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="vaultDeleteDialog" class="vault-dialog">
     <form method="dialog">
       <div class="section-kicker">删除仓库记录</div>

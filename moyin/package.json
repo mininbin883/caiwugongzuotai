@@ -1,6 +1,6 @@
 {
   "name": "veilforge-local-redactor",
-  "version": "2.21.0",
+  "version": "2.22.0",
   "description": "离线文档敏感信息识别与脱敏桌面应用",
   "author": "Clean-room implementation",
   "main": "src/main.cjs",

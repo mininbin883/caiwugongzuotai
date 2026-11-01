@@ -8,6 +8,7 @@ import { buildTableModel, groupByColumn, groupByType, wholeColumnFindings, creat
 import { demoDocumentResult, workflowSteps } from '../core/workflow-demo.mjs';
 import { MODULE_DEFINITIONS, MODULE_IDS, moduleIdFromHash, nextModuleId, normalizeModuleId } from '../core/navigation-controller.mjs';
 import { autoVaultDecision, createPastedDocument } from '../core/quick-entry-controller.mjs';
+import { initLicenseUi } from './license-ui.mjs';
 
 const state = {
   sourceName: '',
@@ -224,6 +225,19 @@ function loadDemo() {
 let vaultDialogResolve = null;
 let vaultDialogNeedsConfirmation = false;
 let pdfPasswordResolve = null;
+
+let licenseUi = null;
+
+// 导出新副本前先核对授权：没有授权就打开激活页，不再往下走（不会先写仓库再撤销）。
+async function ensureLicensed() {
+  const status = await licenseUi?.refresh();
+  if (status?.allowed) return true;
+  licenseUi?.handleExportError(new Error({
+    expired: 'LOCAL_LICENSE_EXPIRED', clock: 'LOCAL_LICENSE_CLOCK', machine: 'LOCAL_LICENSE_MACHINE_MISMATCH',
+    updates: 'LOCAL_LICENSE_UPDATES_EXPIRED', invalid: 'LOCAL_LICENSE_INVALID', device: 'LOCAL_LICENSE_DEVICE_UNAVAILABLE'
+  }[status?.state] || 'LOCAL_LICENSE_REQUIRED'));
+  return false;
+}
 
 function showToast(message, kind = 'ok') {
   elements.toast.textContent = message;
@@ -2212,6 +2226,7 @@ async function exportResult(kind, options = {}) {
     return result || null;
   } catch (error) {
     if (options.throwOnError) throw error;
+    if (licenseUi?.handleExportError(error)) return null;
     showToast(`导出失败：${friendlyError(error)}`, 'error');
     return null;
   }
@@ -2285,6 +2300,7 @@ function exportBaseName() {
 
 async function exportPrimary() {
   if (!state.sourceText || state.restoreEntry) return;
+  if (!(await ensureLicensed())) return;
   const kind = primaryExportKind();
   if (kind === 'txt' && state.quickEntryMode === 'image-to-text' && state.style !== 'token') {
     await exportRecognizedText();
@@ -2321,6 +2337,7 @@ async function exportPrimary() {
     showNextSteps();
   } catch (error) {
     if (saved?.id && state.vault) await window.veilforge.deleteVaultEntry(state.vault.token, saved.id).then(applyVaultStateAndFilters).catch(() => {});
+    if (licenseUi?.handleExportError(error)) return;
     showToast(`导出失败：${friendlyError(error)}`, 'error');
   } finally {
     renderExportBar();
@@ -2481,6 +2498,7 @@ elements.batchExportButton.addEventListener('click', async () => {
     }
     return;
   }
+  if (!(await ensureLicensed())) return;
   const total = [...state.batchJobs.values()].filter((job) => job.status === 'done').length;
   const reversible = state.style === 'token';
   // 可逆批次：整批对照表存成一条仓库记录，先确保仓库已打开。
@@ -2534,6 +2552,7 @@ elements.batchExportButton.addEventListener('click', async () => {
     else if (result.canceled) showToast(`已停止导出：完成 ${result.exported} 个，清单已保存${vaultSuffix}`);
     else showToast(`批量导出完成：${result.exported} 个，失败 ${result.failed} 个${vaultSuffix}`, result.vaultSave?.failed ? 'error' : 'ok');
   } catch (error) {
+    if (licenseUi?.handleExportError(error)) return;
     showToast(`批量导出失败：${friendlyError(error)}`, 'error');
   } finally {
     state.batchExport = null;
@@ -3435,3 +3454,4 @@ renderVaultState();
 renderOcrBackendState();
 void initializeBundledNer();
 void initializeOcrBackend();
+licenseUi = initLicenseUi({ friendlyError, showToast });
