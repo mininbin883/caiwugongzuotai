@@ -5,48 +5,48 @@ export const MODULE_IDS = Object.freeze(['redact', 'batch', 'vault', 'restore', 
 export const MODULE_DEFINITIONS = Object.freeze({
   redact: Object.freeze({
     label: '文件脱敏',
-    kicker: '主工作流',
-    title: '导入、核对、导出，一次完成',
-    description: '可选择文档、粘贴文字或把图片转换为 TXT。常用类型和脱敏方式在左侧；高级识别选项集中到“保护设置”。',
-    status: '三步闭环',
+    kicker: '第一步 · 处理单个文件',
+    title: '导入文件 → 核对 → 导出副本',
+    description: '把文件里的公司名、人名、税号、证件号、电话、账号、地址换成代号，导出一份可以放心发给 AI 的副本。原文件不会被修改。',
+    status: '三步完成',
     action: '导入文档',
-    checklist: Object.freeze(['选择文档、粘贴文字或使用图片转 TXT', '核对识别结果并决定是否隐藏', '导出副本；可选自动写入已解锁仓库'])
+    checklist: Object.freeze(['点“导入文档”，选择 Word、Excel、PDF 或 CSV', '在右侧核对：勾选的会被隐藏，漏掉的在原文里选中补上', '点“确认并导出副本”，把副本和“给 AI 的要求”发给 AI'])
   }),
   batch: Object.freeze({
     label: '批处理',
-    kicker: '多文件队列',
-    title: '一次选择多个文件，后台依次处理',
-    description: '队列、进度、失败原因和批量导出集中在这一页。仓库解锁时可把导出成功项自动加密入库。',
-    status: '本机串行处理',
+    kicker: '多个文件一起处理',
+    title: '一批文件，一个编号，一次换回',
+    description: '把一家企业的多份资料（余额表、发票导出、往来明细等）一起拖进来。同一家公司、同一个人在所有文件里用同一个代号，逆脱敏时选这一个编号就行。',
+    status: '后台依次处理',
     action: '选择多个文件',
-    checklist: Object.freeze(['选择多个支持的文件', '观察等待、处理和完成状态', '批量导出；可选把成功项自动写入仓库'])
+    checklist: Object.freeze(['点“选择多个文件”或直接把文件拖进窗口', '等全部显示“已完成”，选择导出模式（做税务筛查选“税务筛查”）', '点“导出为一个批次”，把整个文件夹发给 AI'])
   }),
   vault: Object.freeze({
     label: '加密仓库',
-    kicker: 'AES 本地保险箱',
-    title: '脱敏结果与可逆映射只留在本机',
-    description: '创建或打开仓库后，可以搜索并按类型/日期筛选记录，查看当前会话备份历史，轮换密码以及回收空间。',
+    kicker: '换回原文的钥匙',
+    title: '代号对照表加密保存在本机',
+    description: '每次导出时，“哪个代号对应哪个原文”会加密存进仓库，AI 返回后靠它换回原文。请记住仓库密码（忘记无法找回），并定期“导出备份”。',
     status: '默认锁定',
     action: '打开或新建仓库',
-    checklist: Object.freeze(['打开现有仓库或创建新仓库', '搜索、筛选并管理脱敏结果与可逆映射', '查看备份历史，使用后立即锁定'])
+    checklist: Object.freeze(['第一次使用点“新建”并设置密码；以后点“打开”输入密码', '在这里查看、搜索、删除以前的记录', '每月“导出备份”一次，存到 U 盘；换电脑时“导入备份”'])
   }),
   restore: Object.freeze({
     label: '逆脱敏',
-    kicker: '导回并逆脱敏',
-    title: '把 AI 返回内容中的代号换回原文',
-    description: '把 AI 返回的文件拖进来，墨隐按文件编号自动找到仓库里的记录，核对后下载与原文件相同格式的结果；也可以粘贴 AI 的回复。',
-    status: '导入返回件后自动按编号找到记录',
+    kicker: '最后一步 · AI 返回后',
+    title: '把 AI 返回内容里的代号换回原文',
+    description: 'AI 返回的报告或文件里写的是代号。把它拖进来，墨隐按文件名里的编号找到对应记录，换回真实名称，并按原格式下载。',
+    status: '需要先打开仓库',
     action: '导入 AI 返回的文件',
-    checklist: Object.freeze(['导入 AI 返回的文件，或粘贴它的回复', '自动按编号找到仓库记录并核对', '确认核对单后下载逆脱敏结果'])
+    checklist: Object.freeze(['把 AI 返回的文件拖进来，或粘贴 AI 的回复', '确认上方选中的是对应编号的记录', '点“开始逆脱敏”，核对提醒后下载结果'])
   }),
   protect: Object.freeze({
     label: '保护设置',
-    kicker: '识别与处理策略',
-    title: '在一个地方管理所有识别规则',
-    description: '选择要找出的信息类型，补充要隐藏或要保留的词，配置离线 NER、OCR 引擎和导出方式。改动点“应用并重新识别”后生效，不会打乱正在核对的内容。',
+    kicker: '一般不用改',
+    title: '调整要隐藏哪些信息',
+    description: '默认设置已经适合大多数财务资料。需要时可以关闭某类识别（例如不隐藏地址），或补充一定要隐藏、一定不隐藏的词。改完点“应用并重新识别”。',
     status: '改动需点“应用”',
     action: '定位到自定义词',
-    checklist: Object.freeze(['选择敏感信息类型和脱敏方式', '补充自定义词、类型化词与保留词', '确认离线 NER 与 OCR 引擎状态'])
+    checklist: Object.freeze(['勾选要识别的信息类型', '补充一定要隐藏的词，或不需要隐藏的词', '点“应用并重新识别”生效'])
   })
 });
 

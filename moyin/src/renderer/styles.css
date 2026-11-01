@@ -504,3 +504,31 @@ body.has-document .main-panel { overflow: visible; }
 .license-howto ul { margin: 0 0 6px; padding-left: 18px; color: var(--ink); font-size: 12px; line-height: 1.7; }
 .license-publisher, .license-note { font-size: 11px !important; }
 @media (max-width: 560px) { .license-device-row { flex-direction: column; } .license-dialog .vault-dialog-actions { flex-wrap: wrap; } }
+
+/* 新手引导与使用帮助 */
+.help-button { padding-inline: 14px; }
+.review-tip { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.tour-overlay { position: fixed; inset: 0; z-index: 1000; }
+.tour-spotlight { position: fixed; border-radius: 14px; box-shadow: 0 0 0 9999px rgba(18,25,22,.58); outline: 2px solid #d8ec8c; transition: top .2s, left .2s, width .2s, height .2s; pointer-events: none; }
+.tour-spotlight.centered { top: 50%; left: 50%; width: 0; height: 0; outline: none; }
+.tour-card { position: fixed; z-index: 1001; display: grid; gap: 8px; padding: 18px 20px; border-radius: 16px; background: var(--panel); color: var(--ink); box-shadow: 0 24px 80px rgba(0,0,0,.28); }
+.tour-card.centered { top: 50%; left: 50%; width: min(460px, calc(100vw - 32px)); transform: translate(-50%, -50%); }
+.tour-count { color: var(--green); font-size: 11px; font-weight: 800; letter-spacing: .04em; }
+.tour-title { margin: 0; font-size: 18px; }
+.tour-body { margin: 0; color: #3f4944; font-size: 13px; line-height: 1.7; }
+.tour-flow, .help-flow { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 0; padding: 0; list-style: none; counter-reset: flow; }
+.tour-flow li, .help-flow li { counter-increment: flow; padding: 5px 10px; border-radius: 99px; background: #e7f1e6; color: var(--green); font-size: 12px; font-weight: 700; }
+.tour-flow li::before, .help-flow li::before { content: counter(flow) " "; }
+.tour-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.tour-skip { margin-right: auto; }
+body.touring { overflow: hidden; }
+.help-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+.help-tasks { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; margin-top: 6px; }
+.help-task { padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fbfaf6; }
+.help-task-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.help-task h3 { margin: 0 0 6px; font-size: 14px; }
+.help-steps { margin: 0; padding-left: 18px; color: #3f4944; font-size: 12px; line-height: 1.7; }
+.help-subtitle { margin: 12px 0 2px; font-size: 14px; }
+.help-faq-item { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.help-faq-item summary { cursor: pointer; font-weight: 700; }
+.help-faq-item p { margin: 6px 0 0 !important; color: #3f4944 !important; }

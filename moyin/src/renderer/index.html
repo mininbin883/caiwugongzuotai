@@ -19,6 +19,7 @@
       <div class="privacy-badge"><span></span>离线模式 · 内容不出本机</div>
       <div class="top-actions">
         <button id="licenseBadge" class="license-badge" type="button" title="授权与激活">正在读取授权…</button>
+        <button id="helpButton" class="button button-ghost help-button" type="button" title="操作步骤、常见问题、新手引导">使用帮助</button>
         <button id="resetButton" class="button button-ghost">清空</button>
         <button id="openButton" class="button button-dark">导入文档</button>
       </div>
@@ -132,7 +133,7 @@
           <div class="vault-heading">
             <div>
               <div class="section-kicker">加密仓库</div>
-              <h2>AES 本地保险箱</h2>
+              <h2>文件仓库</h2>
             </div>
             <span id="vaultStatus" class="vault-status">已锁定</span>
           </div>
@@ -217,10 +218,10 @@
             <span>1</span><div><strong>导入</strong><small>原文件保持不变</small></div>
           </li>
           <li id="workflowStepReview">
-            <span>2</span><div><strong>核对</strong><small>逐项决定是否隐藏</small></div>
+            <span>2</span><div><strong>核对</strong><small>勾选的隐藏，漏掉的补上</small></div>
           </li>
           <li id="workflowStepExport">
-            <span>3</span><div><strong>导出与入库</strong><small>副本交给 AI，映射留在本机</small></div>
+            <span>3</span><div><strong>导出副本</strong><small>副本发给 AI，对照表留在本机</small></div>
           </li>
           <li class="workflow-status"><strong id="workflowSummary">当前：导入文档</strong></li>
         </ol>
@@ -304,7 +305,7 @@
             <button id="imageToTextButton" class="button button-ghost hidden" hidden>图片转 TXT</button>
             <button id="demoButton" class="button button-ghost">用示例试一试</button>
           </div>
-          <div class="supported">WORD · EXCEL · PDF · CSV · TXT/MD · PNG/JPG/WEBP/TIFF</div>
+          <div class="supported">WORD · EXCEL（含 .XLS）· PDF · CSV · TXT/MD</div>
           <p class="empty-privacy">文件无需上传；原文件保持原样。</p>
         </div>
 
@@ -361,6 +362,7 @@
             <div class="review-title">
               <h2>要隐藏的信息</h2>
               <p id="reviewSummary" class="review-summary">勾选 = 隐藏，不勾 = 原样保留</p>
+              <p class="review-tip">漏掉的：在左侧原文里选中文字，点“全文同样的都隐藏”。表格文件点“按列”核对更快。</p>
             </div>
             <div class="review-tools">
               <div id="reviewViewToggle" class="segmented review-view" role="tablist" aria-label="核对方式">
@@ -465,6 +467,25 @@
     </form>
   </dialog>
 
+  <div id="tourOverlay" class="tour-overlay hidden" role="dialog" aria-modal="true" aria-label="新手引导">
+    <div id="tourSpotlight" class="tour-spotlight"></div>
+    <div id="tourCard" class="tour-card" aria-live="polite"></div>
+  </div>
+  <dialog id="helpDialog" class="vault-dialog help-dialog">
+    <form method="dialog">
+      <div class="section-kicker">使用帮助</div>
+      <h2>墨隐怎么用</h2>
+      <p>墨隐把文件里的敏感信息换成代号，你把副本发给 AI；AI 返回后，在“逆脱敏”页换回原文。下面是常用操作的步骤。</p>
+      <ol class="help-flow"><li>导出脱敏副本</li><li>把副本发给 AI</li><li>AI 返回后换回原文</li></ol>
+      <div id="helpTasks" class="help-tasks"></div>
+      <h3 class="help-subtitle">常见问题</h3>
+      <div id="helpFaq" class="help-faq"></div>
+      <div class="vault-dialog-actions">
+        <button id="helpReplayTour" type="button" class="button button-ghost">重新看新手引导</button>
+        <button id="helpClose" type="button" class="button button-dark">知道了</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="licenseDialog" class="vault-dialog license-dialog">
     <form method="dialog">
       <div class="section-kicker" id="licenseKicker">激活墨隐</div>

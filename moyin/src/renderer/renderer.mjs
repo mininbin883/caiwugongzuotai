@@ -9,6 +9,7 @@ import { demoDocumentResult, workflowSteps } from '../core/workflow-demo.mjs';
 import { MODULE_DEFINITIONS, MODULE_IDS, moduleIdFromHash, nextModuleId, normalizeModuleId } from '../core/navigation-controller.mjs';
 import { autoVaultDecision, createPastedDocument } from '../core/quick-entry-controller.mjs';
 import { initLicenseUi } from './license-ui.mjs';
+import { initGuide } from './guide-tour.mjs';
 
 const state = {
   sourceName: '',
@@ -3455,3 +3456,6 @@ renderOcrBackendState();
 void initializeBundledNer();
 void initializeOcrBackend();
 licenseUi = initLicenseUi({ friendlyError, showToast });
+const guide = initGuide({ setActiveModule: (moduleId) => setActiveModule(moduleId) });
+// 激活页（如有）关掉后，第一次使用自动播放新手引导
+setTimeout(() => guide.maybeStartFirstRun(), 1200);
