@@ -170,14 +170,17 @@ function normalizeExternalFindings(text, values, enabledTypes) {
     const start = Number(item?.start);
     const end = Number(item?.end);
     const confidence = Number(item?.confidence);
-    if (!enabledTypes.has(type) || !TYPE_LABELS[type] || !Number.isInteger(start) || !Number.isInteger(end) ||
+    const manual = item?.source === 'manual';
+    // 手动补选是用户明确指定的，即使该类自动识别被关闭也照样生效。
+    if ((!manual && !enabledTypes.has(type)) || !TYPE_LABELS[type] || !Number.isInteger(start) || !Number.isInteger(end) ||
         start < 0 || end <= start || end > text.length || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) continue;
     results.push({
       type,
       value: text.slice(start, end),
       start,
       end,
-      source: item?.source === 'onnx' ? 'onnx' : 'external',
+      source: manual ? 'manual' : item?.source === 'onnx' ? 'onnx' : 'external',
+      ...(manual ? { hint: '手动补选' } : {}),
       confidence,
       reviewRequired: Boolean(item?.reviewRequired),
       enabled: item?.enabled !== false
@@ -186,7 +189,19 @@ function normalizeExternalFindings(text, values, enabledTypes) {
   return results;
 }
 
-function removeOverlaps(findings) {
+function removeOverlaps(input) {
+  // 手动补选优先：先去掉与手动补选重叠的自动候选，再做常规去重。
+  const manualRanges = input.filter((item) => item.source === 'manual');
+  let findings = input;
+  if (manualRanges.length) {
+    const mask = new Uint8Array(Math.max(...manualRanges.map((item) => item.end)) + 1);
+    for (const range of manualRanges) mask.fill(1, range.start, range.end);
+    const overlapsManual = (item) => {
+      for (let index = item.start; index < Math.min(item.end, mask.length); index += 1) if (mask[index]) return true;
+      return false;
+    };
+    findings = input.filter((item) => item.source === 'manual' || !overlapsManual(item));
+  }
   const priority = { secret: 110, uscc: 100, idcard: 90, bankcard: 80, mobile: 70, landline: 60, email: 50, ipv4: 45, company: 40, person: 35, address: 30, custom: 20 };
   const sorted = findings.slice().sort((a, b) => a.start - b.start || (priority[b.type] - priority[a.type]) || (b.end - b.start) - (a.end - a.start));
   // 按起点排序后，只需与已接受候选的最大终点比较即可判断重叠（线性复杂度）。
@@ -263,7 +278,10 @@ export function analyzeText(input, options = {}) {
   if (options.propagateRepeats !== false) findings.push(...collectRepeatedValues(text, findings));
 
   const protectedRanges = protectedIntervals(text, options.alwaysKeepTerms);
-  const normalized = removeOverlaps(outsideProtected(findings, protectedRanges)).map((finding, index) => ({
+  // “总是保留词”不影响手动补选（用户在原文中明确选中的位置以手动为准）。
+  const kept = outsideProtected(findings.filter((item) => item.source !== 'manual'), protectedRanges)
+    .concat(findings.filter((item) => item.source === 'manual'));
+  const normalized = removeOverlaps(kept).map((finding, index) => ({
     id: `${finding.type}-${finding.start}-${finding.end}-${index}`,
     ...finding,
     label: TYPE_LABELS[finding.type],

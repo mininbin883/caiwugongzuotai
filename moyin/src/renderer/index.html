@@ -292,8 +292,22 @@
           <div class="editor-tabs">
             <button class="editor-tab active" data-tab="source">原始内容</button>
             <button class="editor-tab" data-tab="redacted">脱敏预览</button>
+            <span class="highlight-legend"><span><i style="background:#ffe08a"></i>已隐藏</span><span><i style="background:#bcd8f5"></i>手动补选</span><span><i style="background:#ffc97a"></i>需核对</span><span><i style="background:transparent;border-bottom:2px solid #9a9a9a"></i>已取消</span></span>
           </div>
-          <textarea id="sourceEditor" class="document-editor" spellcheck="false" aria-label="文档内容"></textarea>
+          <div id="selectionBar" class="selection-bar idle" role="toolbar" aria-label="手动补选">
+            <span id="selectionHint" class="selection-hint">漏了没识别的？在下面原文中用鼠标选中那段文字，即可手动补选隐藏。</span>
+            <span id="selectionActions" class="selection-actions hidden">
+              <span class="selection-label">已选</span><code id="selectionPreview"></code>
+              <select id="selectionType" aria-label="补选类型"></select>
+              <button id="selectionHideOnceButton" type="button" class="button button-dark button-small" title="快捷键 Ctrl+Enter">只隐藏这一处</button>
+              <button id="selectionHideAllButton" type="button" class="button button-accent button-small">全文同样的都隐藏</button>
+              <button id="selectionKeepButton" type="button" class="button button-ghost button-small">这个词不隐藏</button>
+            </span>
+          </div>
+          <div id="sourceEditorWrap" class="editor-wrap">
+            <div id="sourceHighlight" class="document-editor editor-highlight" aria-hidden="true"></div>
+            <textarea id="sourceEditor" class="document-editor editor-overlay" spellcheck="false" aria-label="文档内容"></textarea>
+          </div>
           <textarea id="redactedEditor" class="document-editor hidden" spellcheck="false" readonly aria-label="脱敏预览"></textarea>
         </div>
 

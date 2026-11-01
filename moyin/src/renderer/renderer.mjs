@@ -66,6 +66,8 @@ const elements = Object.fromEntries([
   'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
   'restorePanel', 'restoreInput', 'restoreOutput', 'restoreMode', 'restoreButton', 'restoreExportButton', 'restoreOfficeButton', 'restoreReport',
   'restoreChecklist', 'restoreConfirm', 'restoreConfirmLabel', 'exportAuditBox',
+  'sourceEditorWrap', 'sourceHighlight', 'selectionBar', 'selectionHint', 'selectionActions', 'selectionPreview', 'selectionType',
+  'selectionHideOnceButton', 'selectionHideAllButton', 'selectionKeepButton',
   'nerStatus', 'nerMeta', 'nerThreshold', 'nerSelectButton', 'nerClearButton', 'nerAnalyzeButton',
   'ocrBackendStatus', 'ocrBackendMeta', 'ocrRapidButton', 'ocrTesseractButton', 'exportOcrTextButton',
   'pasteTextDialog', 'pasteTextForm', 'pasteTextName', 'pasteTextInput', 'pasteTextCounter', 'pasteTextError', 'pasteTextCancel'
@@ -839,7 +841,7 @@ function renderFindings() {
   }
   for (const finding of state.findings) {
     const row = document.createElement('div');
-    row.className = `finding-row ${finding.enabled ? '' : 'disabled'} ${finding.reviewRequired ? 'needs-review' : ''}`;
+    row.className = `finding-row ${finding.enabled ? '' : 'disabled'} ${finding.reviewRequired ? 'needs-review' : ''} ${finding.source === 'manual' ? 'manual' : ''}`;
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.checked = finding.enabled;
@@ -857,6 +859,9 @@ function renderFindings() {
     if (finding.reviewRequired) badge.title = finding.source === 'onnx' ? '模型置信度低于自动采纳阈值，请人工复核后勾选' : '位置可能是词的一部分，请人工复核';
     const value = document.createElement('code');
     value.textContent = finding.value;
+    value.className = 'locatable';
+    value.title = '点击在原文中定位';
+    value.addEventListener('click', () => selectSourceRange(finding.start, finding.end));
     const arrow = document.createElement('span');
     arrow.className = 'finding-arrow';
     arrow.textContent = '→';
@@ -869,6 +874,15 @@ function renderFindings() {
       hint.className = 'finding-hint';
       hint.textContent = finding.hint;
       row.append(hint);
+    }
+    if (finding.source === 'manual') {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'mini-button';
+      remove.textContent = '移除';
+      remove.title = '撤销这一处手动补选';
+      remove.addEventListener('click', () => removeManualFinding(finding));
+      row.append(remove);
     }
     elements.findingList.append(row);
   }
@@ -940,11 +954,169 @@ function hideAuditItem(item) {
     return;
   }
   // 人工补选绑定当前原文；重新识别时作为外部候选并入，原文被编辑后自动失效。
-  state.manualFindings.push({ type: item.type, start: item.start, end: item.end, confidence: 1, source: 'audit', sourceText: state.sourceText });
+  state.manualFindings.push({ type: item.type, start: item.start, end: item.end, confidence: 1, source: 'manual', sourceText: state.sourceText });
   runAnalysis();
 }
 
+// ---------- 手动补选：在原文中选中文字后隐藏 ----------
+
+const TYPE_TERM_KEYS = Object.freeze({
+  company: '公司', person: '姓名', mobile: '手机', landline: '固定电话', idcard: '身份证', uscc: '信用代码',
+  email: '邮箱', bankcard: '银行卡', address: '地址', ipv4: 'IPv4', secret: '密码', custom: '自定义'
+});
+
+function currentSelection() {
+  const editor = elements.sourceEditor;
+  if (!state.sourceText || elements.sourceEditorWrap.classList.contains('hidden') || state.restoreEntry) return null;
+  if (editor.value !== state.sourceText) return null;
+  let start = editor.selectionStart;
+  let end = editor.selectionEnd;
+  if (!(end > start)) return null;
+  // 去掉选区首尾的空白，避免把空格换行也隐藏进去。
+  while (start < end && /\s/u.test(state.sourceText[start])) start += 1;
+  while (end > start && /\s/u.test(state.sourceText[end - 1])) end -= 1;
+  if (!(end > start)) return null;
+  return { start, end, value: state.sourceText.slice(start, end) };
+}
+
+const COMMON_SURNAMES = new Set([...'王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤常温康施文牛樊葛邢安齐易乔伍庞颜倪庄聂章鲁岳翟殷詹申欧耿关兰焦俞左柳甘祝包宁尚符舒阮柯纪梅童凌毕单季裴霍涂成苗谷盛曲翁冉骆蓝路游辛靳管柴蒙鲍华喻祁蒲房滕屈饶解牟艾尤阳时穆农司卓古吉缪简车项连芦麦褚娄窦戚岑景党宫费卜冷晏席卫米柏宗瞿桂全佟应臧闵苟邬边卞姬师和仇栾隋商刁沙荣巫寇桑郎甄丛仲虞敖巩明佘池查麻苑迟邝'].filter(Boolean));
+const COMPOUND_SURNAMES = ['欧阳', '司马', '上官', '诸葛', '东方', '皇甫', '尉迟', '公孙', '慕容', '令狐', '长孙', '宇文', '司徒', '夏侯', '端木', '轩辕'];
+
+function guessSelectionType(value) {
+  const probe = analyzeText(value, { propagateRepeats: false });
+  const whole = probe.findings.find((item) => item.start === 0 && item.end === value.length);
+  if (whole) return whole.type;
+  if (/(?:有限公司|有限责任公司|集团|公司|事务所|研究院|银行|医院|学校|大学)$/u.test(value)) return 'company';
+  const compact = value.replace(/[\s\u3000\u00A0]/gu, '');
+  if (/^[\p{Script=Han}·]{2,4}$/u.test(compact) &&
+      (COMMON_SURNAMES.has(compact[0]) || COMPOUND_SURNAMES.some((surname) => compact.startsWith(surname)) || /^[老小阿]/u.test(compact))) return 'person';
+  if (/(?:省|市|区|县|镇|乡|路|街|号|室|楼|栋|单元)/u.test(value) && value.length >= 6) return 'address';
+  return 'custom';
+}
+
+function renderSelectionTypeOptions() {
+  if (elements.selectionType.options.length) return;
+  for (const [type, label] of Object.entries(TYPE_LABELS)) {
+    const option = document.createElement('option');
+    option.value = type;
+    option.textContent = label;
+    elements.selectionType.append(option);
+  }
+}
+
+let lastSelectionKey = '';
+function updateSelectionBar() {
+  const selection = currentSelection();
+  const active = Boolean(selection);
+  elements.selectionBar.classList.toggle('active', active);
+  elements.selectionBar.classList.toggle('idle', !active);
+  elements.selectionActions.classList.toggle('hidden', !active);
+  elements.selectionHint.classList.toggle('hidden', active);
+  if (!active) { lastSelectionKey = ''; return; }
+  renderSelectionTypeOptions();
+  const key = `${selection.start}:${selection.end}`;
+  if (key !== lastSelectionKey) {
+    // 只在选区变化时重新猜类型，避免覆盖用户刚改的类型。
+    lastSelectionKey = key;
+    elements.selectionType.value = guessSelectionType(selection.value);
+  }
+  const chars = [...selection.value];
+  elements.selectionPreview.textContent = chars.length > 24 ? `${chars.slice(0, 24).join('')}…（${chars.length} 字）` : selection.value;
+  elements.selectionPreview.title = selection.value;
+  const singleLine = !selection.value.includes('\n');
+  elements.selectionHideAllButton.disabled = !singleLine || chars.length < 2;
+  elements.selectionKeepButton.disabled = !singleLine || chars.length < 2;
+}
+
+function appendTermLine(textarea, line) {
+  const existing = textarea.value.split(/\r?\n/).map((item) => item.trim());
+  if (existing.includes(line)) return false;
+  textarea.value = `${textarea.value.replace(/\s*$/u, '')}${textarea.value.trim() ? '\n' : ''}${line}`;
+  return true;
+}
+
+function hideSelectionOnce() {
+  const selection = currentSelection();
+  if (!selection) return;
+  const type = elements.selectionType.value || 'custom';
+  state.manualFindings = state.manualFindings.filter((item) =>
+    !(item.sourceText === state.sourceText && item.start < selection.end && selection.start < item.end));
+  state.manualFindings.push({ type, start: selection.start, end: selection.end, confidence: 1, source: 'manual', sourceText: state.sourceText });
+  runAnalysis();
+  elements.sourceEditor.setSelectionRange(selection.end, selection.end);
+  updateSelectionBar();
+  showToast(`已补选隐藏：${TYPE_LABELS[type]}`);
+}
+
+function hideSelectionEverywhere() {
+  const selection = currentSelection();
+  if (!selection || selection.value.includes('\n') || [...selection.value].length < 2) return;
+  const type = elements.selectionType.value || 'custom';
+  // 写进“类型化隐藏词”，以后重新识别也会生效，并且用户能看到、能删。
+  appendTermLine(elements.typedTerms, `${TYPE_TERM_KEYS[type] || '自定义'}：${selection.value}`);
+  // 若该词之前被设为“总是保留”，一并移除。
+  elements.alwaysKeepTerms.value = elements.alwaysKeepTerms.value.split(/\r?\n/).filter((line) => line.trim() !== selection.value).join('\n');
+  runAnalysis();
+  const count = state.findings.filter((item) => item.value === selection.value).length;
+  elements.sourceEditor.setSelectionRange(selection.end, selection.end);
+  updateSelectionBar();
+  showToast(`全文已隐藏 ${count} 处“${selection.value}”，已加入左侧类型化隐藏词`);
+}
+
+function keepSelection() {
+  const selection = currentSelection();
+  if (!selection || selection.value.includes('\n') || [...selection.value].length < 2) return;
+  appendTermLine(elements.alwaysKeepTerms, selection.value);
+  state.manualFindings = state.manualFindings.filter((item) => !(item.sourceText === state.sourceText && item.start === selection.start && item.end === selection.end));
+  runAnalysis();
+  elements.sourceEditor.setSelectionRange(selection.end, selection.end);
+  updateSelectionBar();
+  showToast(`“${selection.value}”已设为不隐藏（加入左侧总是保留词）`);
+}
+
+function removeManualFinding(finding) {
+  state.manualFindings = state.manualFindings.filter((item) =>
+    !(item.sourceText === state.sourceText && item.start === finding.start && item.end === finding.end));
+  runAnalysis();
+  showToast('已撤销这一处手动补选');
+}
+
+// ---------- 原文高亮 ----------
+const HIGHLIGHT_LIMIT = 600000; // 超长文档不做高亮，避免界面卡顿
+
+function renderSourceHighlight() {
+  const layer = elements.sourceHighlight;
+  if (!layer) return;
+  const text = elements.sourceEditor.value;
+  if (!text || text !== state.sourceText || text.length > HIGHLIGHT_LIMIT) {
+    layer.replaceChildren();
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  let cursor = 0;
+  const findings = state.findings.slice().sort((left, right) => left.start - right.start);
+  for (const finding of findings) {
+    if (finding.start < cursor) continue;
+    if (finding.start > cursor) fragment.append(text.slice(cursor, finding.start));
+    const mark = document.createElement('mark');
+    mark.textContent = text.slice(finding.start, finding.end);
+    mark.className = !finding.enabled ? 'hl-off' : finding.source === 'manual' ? 'hl-manual' : finding.reviewRequired ? 'hl-review' : '';
+    fragment.append(mark);
+    cursor = finding.end;
+  }
+  // 末尾补一个零宽字符，保证最后一行换行时高度一致。
+  fragment.append(`${text.slice(cursor)}\u200b`);
+  layer.replaceChildren(fragment);
+  syncHighlightScroll();
+}
+
+function syncHighlightScroll() {
+  elements.sourceHighlight.scrollTop = elements.sourceEditor.scrollTop;
+  elements.sourceHighlight.scrollLeft = elements.sourceEditor.scrollLeft;
+}
+
 function refreshPreview() {
+  renderSourceHighlight();
   renderExportAudit();
   elements.redactedEditor.value = redactedText();
   elements.findingCount.textContent = String(state.findings.length);
@@ -1509,6 +1681,23 @@ elements.pdfPasswordDialog.addEventListener('cancel', (event) => {
   finishPdfPassword(null);
 });
 elements.resetButton.addEventListener('click', reset);
+for (const eventName of ['select', 'mouseup', 'keyup']) elements.sourceEditor.addEventListener(eventName, updateSelectionBar);
+elements.sourceEditor.addEventListener('scroll', syncHighlightScroll);
+new ResizeObserver(() => syncHighlightScroll()).observe(elements.sourceEditor);
+document.addEventListener('selectionchange', () => { if (document.activeElement === elements.sourceEditor) updateSelectionBar(); });
+elements.sourceEditor.addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && currentSelection()) {
+    event.preventDefault();
+    hideSelectionOnce();
+  }
+});
+// 工具栏按钮用 mousedown 阻止默认行为，点击时原文选区不会丢失。
+for (const button of [elements.selectionHideOnceButton, elements.selectionHideAllButton, elements.selectionKeepButton]) {
+  button.addEventListener('mousedown', (event) => event.preventDefault());
+}
+elements.selectionHideOnceButton.addEventListener('click', hideSelectionOnce);
+elements.selectionHideAllButton.addEventListener('click', hideSelectionEverywhere);
+elements.selectionKeepButton.addEventListener('click', keepSelection);
 elements.sourceEditor.addEventListener('input', () => {
   state.sourceText = elements.sourceEditor.value;
   clearNerFindings();
@@ -2023,8 +2212,10 @@ for (const button of document.querySelectorAll('[data-tab]')) {
   button.addEventListener('click', () => {
     document.querySelectorAll('[data-tab]').forEach((item) => item.classList.toggle('active', item === button));
     const sourceActive = button.dataset.tab === 'source';
-    elements.sourceEditor.classList.toggle('hidden', !sourceActive);
+    elements.sourceEditorWrap.classList.toggle('hidden', !sourceActive);
+    elements.selectionBar.classList.toggle('hidden', !sourceActive);
     elements.redactedEditor.classList.toggle('hidden', sourceActive);
+    if (sourceActive) renderSourceHighlight();
   });
 }
 

@@ -285,3 +285,32 @@ h1, h2, p { margin-top: 0; }
 .restore-checklist .warn { color: #8a3f35; }
 .restore-confirm { font-size: 11px; display: flex; gap: 4px; align-items: center; }
 .finding-hint { font-size: 10px; color: #7a4d10; background: #fff3d6; border-radius: 4px; padding: 0 4px; }
+
+/* 手动补选工具栏 */
+.selection-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 42px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: #f7f4ea; font-size: 12px; position: sticky; top: 0; z-index: 2; }
+.selection-bar.active { background: #fff3d6; }
+.selection-hint { color: var(--muted); }
+.selection-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.selection-actions code { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #fff; border: 1px solid #e3c98f; border-radius: 4px; padding: 2px 6px; }
+.selection-actions select { font-size: 12px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--line); }
+.selection-label { color: #7a4d10; font-weight: 650; }
+.button-small { padding: 5px 10px; font-size: 12px; }
+.finding-row.manual { border-color: #8fb3d9; background: #eef5fc; }
+.finding-row code.locatable { cursor: pointer; }
+.finding-row code.locatable:hover { text-decoration: underline; }
+
+/* 原文高亮：底层镜像同样的文字并标出已隐藏范围，上层透明的文本框负责选择与编辑 */
+.editor-wrap { position: relative; background: var(--panel); }
+.editor-wrap.hidden { display: none; }
+.editor-highlight { position: absolute; inset: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word; color: transparent; pointer-events: none; min-height: 0; resize: none; }
+.editor-overlay { position: relative; background: transparent !important; white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word; }
+.editor-highlight mark { color: transparent; border-radius: 3px; background: #ffe08a; }
+.editor-highlight mark.hl-manual { background: #bcd8f5; }
+.editor-highlight mark.hl-review { background: #ffc97a; }
+.editor-highlight mark.hl-off { background: transparent; text-decoration: line-through; text-decoration-color: #9a9a9a; text-decoration-thickness: 2px; }
+.highlight-legend { display: inline-flex; gap: 10px; margin-left: auto; font-size: 11px; color: var(--muted); align-items: center; }
+.highlight-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
+/* 两层都固定显示纵向滚动条，保证文字排版宽度完全一致 */
+.editor-highlight, .editor-overlay { overflow-y: scroll; }
+.editor-highlight::-webkit-scrollbar { background: transparent; }
+.editor-highlight::-webkit-scrollbar-thumb, .editor-highlight::-webkit-scrollbar-track { background: transparent; }
