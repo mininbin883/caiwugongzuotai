@@ -4,8 +4,9 @@
 const MESSAGES = [
   // 文件与导入
   [/LOCAL_(?:FILE|OFFICE|PDF|CSV|IMAGE)_TOO_LARGE|LOCAL_OFFICE_TEXT_TOO_LARGE|LOCAL_SCAN_TEXT_TOO_LARGE|LOCAL_PASTED_TEXT_TOO_LARGE/, '文件太大，超出了能完整处理的范围。请拆成几份分别导入；墨隐不会只处理一部分冒充完整结果。'],
-  [/LOCAL_(?:DOCUMENT|CSV|OCR|PASTED_TEXT)_EMPTY/, '没有读到任何文字。如果是扫描件或图片，请改用“图片转 TXT”。'],
-  [/LOCAL_(?:DOCUMENT|OFFICE|PDF|IMAGE|IMAGE_TO_TEXT)?_?TYPE_UNSUPPORTED/, '不支持这种文件格式。支持 Word、Excel、PDF、CSV、TXT/Markdown 和常见图片。'],
+  [/LOCAL_IMAGE_FILE_NOT_ACCEPTED/, '不支持图片文件（png、jpg 等）。图片里的文字无法可靠识别，识别不到时会把原图原样导出，所以墨隐不再处理图片。请改用原始的 Excel、Word 或 PDF；只有截图的，请先手动打码再发给 AI。'],
+  [/LOCAL_(?:DOCUMENT|CSV|OCR|PASTED_TEXT)_EMPTY/, '没有读到任何文字。如果是扫描版 PDF，请确认 OCR 组件可用，或改用原始电子文件。'],
+  [/LOCAL_(?:DOCUMENT|OFFICE|PDF|IMAGE|IMAGE_TO_TEXT)?_?TYPE_UNSUPPORTED/, '不支持这种文件格式。支持 Word、Excel（含 .xls）、PDF、CSV、TXT/Markdown；不支持图片。'],
   [/LOCAL_(?:DOCX|XLSX)_FORMAT_INVALID/, '文件内容损坏或不是标准的 Word/Excel 格式。请用 Office 或 WPS 打开后另存一份再导入。'],
   [/LOCAL_XLSX_CELL_MAP_INVALID/, '部分单元格在写回时对不上位置，为避免写错已停止导出（原文件不受影响）。请把这个文件发给我们排查；临时办法是用 Excel 或 WPS 另存为一份新的 .xlsx 再导入。'],
   [/LOCAL_PDF_ENCRYPTED|LOCAL_PDF_PASSWORD_REQUIRED/, 'PDF 设有打开密码，请输入密码后再导入。'],
@@ -13,7 +14,7 @@ const MESSAGES = [
   [/LOCAL_PDF_PAGE_COUNT_INVALID|LOCAL_SCAN_PAGE_COUNT_INVALID/, 'PDF 页数超过上限（原生 PDF 300 页，扫描件 100 页）。请拆分后再导入。'],
   [/LOCAL_PDF_PAGE_TOO_LARGE|LOCAL_IMAGE_DIMENSIONS_INVALID/, '页面或图片尺寸过大，无法可靠处理。请缩小后再导入。'],
   [/LOCAL_PDF_ROTATION_UNSUPPORTED/, '这份 PDF 的页面方向无法可靠处理。请先在 PDF 软件里旋转为正常方向后另存。'],
-  [/LOCAL_PDF_STRUCTURE_PRESERVATION_FAILED/, 'PDF 的表单或批注无法安全保留，已停止导出。可以先另存为普通 PDF，或用“图片转 TXT”。'],
+  [/LOCAL_PDF_STRUCTURE_PRESERVATION_FAILED/, 'PDF 的表单或批注无法安全保留，已停止导出。可以先另存为普通 PDF 再导入。'],
   [/LOCAL_NOT_A_FILE|LOCAL_(?:CSV_)?PATH_INVALID|LOCAL_CSV_NOT_A_FILE/, '找不到这个文件，或它不是普通文件。请确认文件还在原位置。'],
   // 会话与导出
   [/LOCAL_(?:OFFICE|CSV|IMAGE|PDF)_SESSION_(?:EXPIRED|INVALID)|LOCAL_PDF_PASSWORD_SESSION_EXPIRED/, '当前文档的处理会话已失效（可能是原文被编辑过，或停留时间过长）。请重新导入文档。'],
@@ -27,7 +28,7 @@ const MESSAGES = [
   // 可逆与逆脱敏
   [/LOCAL_(?:OFFICE|PDF)_REVERSIBLE_TOKENS_NOT_FOUND/, '在这个文件里没有找到本记录的代号。请确认导入的是 AI 返回的、对应编号的文件。'],
   [/LOCAL_PDF_REVERSIBLE_SIDECAR_(?:REQUIRED|INVALID)/, 'PDF 逆脱敏需要导出时一起生成的坐标副本（.tokens.json），请把它和 PDF 放在同一文件夹。'],
-  [/LOCAL_PDF_REVERSIBLE_COORDINATES_NOT_FOUND/, '这份 PDF 里找不到能写入代号的文字位置（常见于扫描件识别不完整），无法生成可逆副本。可以打开这个文件补选或校正识别文字后单独导出，或改用“图片转 TXT”。'],
+  [/LOCAL_PDF_REVERSIBLE_COORDINATES_NOT_FOUND/, '这份 PDF 里找不到能写入代号的文字位置（常见于扫描件识别不完整），无法生成可逆副本。可以打开这个文件补选或校正识别文字后单独导出。'],
   [/LOCAL_PDF_REVERSIBLE_FINDINGS_INVALID/, '这份 PDF 的隐藏项无法写成可逆代号（位置与识别文字对不上），请打开这个文件核对后单独导出。'],
   [/REVERSIBLE_MAPPING_INVALID|LOCAL_(?:OFFICE_REVERSIBLE|VAULT)_MAPPING_INVALID/, '代号对照表已损坏或不完整，无法逆脱敏。请从仓库备份恢复这条记录。'],
   // 仓库

@@ -90,7 +90,13 @@ const MIN_VAULT_TIMEOUT_MINUTES = 1;
 const MAX_VAULT_TIMEOUT_MINUTES = 60;
 const MAX_BATCH_FILES = 50;
 const MAX_DOCUMENT_SESSIONS = 64;
-const ACCEPTED_EXTENSIONS = new Set([...SUPPORTED_EXTENSIONS, ...IMAGE_EXTENSIONS]);
+// 图片（png/jpg 等）不再导入：OCR 识别不可靠，识别不到时会原样导出、泄露原文。
+const ACCEPTED_EXTENSIONS = new Set(SUPPORTED_EXTENSIONS);
+function unsupportedTypeError(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  const code = IMAGE_EXTENSIONS.includes(extension) ? 'LOCAL_IMAGE_FILE_NOT_ACCEPTED' : 'LOCAL_DOCUMENT_TYPE_UNSUPPORTED';
+  return new Error(`${code}:${path.basename(filePath)}`);
+}
 const documentWorkerPool = new BoundedWorkerPool({ concurrency: 1 });
 const batchQueue = new SerialTaskQueue((filePath, job) => processDocumentPath(filePath, {
   signal: job.abortController.signal,
@@ -559,7 +565,7 @@ async function processDocumentPath(filePath, options = {}) {
 
 async function processDocumentPathInternal(filePath, options = {}) {
   const extension = path.extname(filePath).toLowerCase();
-  if (!ACCEPTED_EXTENSIONS.has(extension)) throw new Error('LOCAL_DOCUMENT_TYPE_UNSUPPORTED');
+  if (!ACCEPTED_EXTENSIONS.has(extension)) throw unsupportedTypeError(filePath);
   if (extension === '.csv') {
     const csv = await extractCsvDocument(filePath);
     const token = randomUUID();
@@ -766,7 +772,7 @@ async function chooseDocument(event) {
     title: '选择需要脱敏的文档',
     properties: ['openFile'],
     filters: [
-      { name: '支持的文档与图片', extensions: [...ACCEPTED_EXTENSIONS].map((ext) => ext.slice(1)) },
+      { name: '支持的文档', extensions: [...ACCEPTED_EXTENSIONS].map((ext) => ext.slice(1)) },
       { name: '所有文件', extensions: ['*'] }
     ]
   });
@@ -797,27 +803,17 @@ async function chooseBatchDocuments(event) {
     title: '选择需要批量脱敏的文档',
     properties: ['openFile', 'multiSelections'],
     filters: [
-      { name: '支持的文档与图片', extensions: [...ACCEPTED_EXTENSIONS].map((ext) => ext.slice(1)) },
+      { name: '支持的文档', extensions: [...ACCEPTED_EXTENSIONS].map((ext) => ext.slice(1)) },
       { name: '所有文件', extensions: ['*'] }
     ]
   });
-  if (result.canceled || !result.filePaths.length) return [];
+  if (result.canceled || !result.filePaths.length) return { jobs: [], skipped: [] };
   return enqueueBatch(event, { paths: result.filePaths });
 }
 
-async function chooseImageForText(event) {
-  const result = await dialog.showOpenDialog({
-    title: '选择需要转换为 TXT 的图片',
-    properties: ['openFile'],
-    filters: [
-      { name: '支持的图片', extensions: IMAGE_EXTENSIONS.map((ext) => ext.slice(1)) }
-    ]
-  });
-  if (result.canceled || !result.filePaths[0]) return null;
-  const filePath = result.filePaths[0];
-  const extension = path.extname(filePath).toLowerCase();
-  if (!IMAGE_EXTENSIONS.includes(extension)) throw new Error('LOCAL_IMAGE_TO_TEXT_TYPE_UNSUPPORTED');
-  return { ...(await processDocumentPath(filePath)), quickEntry: 'image-to-text', sourceToken: registerSourceFile(event, filePath) };
+async function chooseImageForText() {
+  // 图片不再导入（见 ACCEPTED_EXTENSIONS 的说明）；入口已隐藏，这里兜底。
+  throw new Error('LOCAL_IMAGE_FILE_NOT_ACCEPTED');
 }
 
 async function openEncryptedDocument(event, payload) {
@@ -873,11 +869,13 @@ async function enqueueBatch(event, payload) {
   const candidates = [...new Set(supplied.map((value) => String(value || '')).filter(Boolean))];
   if (!candidates.length) throw new Error('LOCAL_BATCH_EMPTY');
   if (candidates.length > MAX_BATCH_FILES) throw new Error('LOCAL_BATCH_LIMIT_EXCEEDED');
+  for (const filePath of candidates) if (!path.isAbsolute(filePath)) throw new Error('LOCAL_BATCH_PATH_INVALID');
+  // 不支持的文件（含图片）跳过并告诉用户，其余照常加入；全部不支持时报错。
+  const skipped = candidates.filter((filePath) => !ACCEPTED_EXTENSIONS.has(path.extname(filePath).toLowerCase()));
+  const accepted = candidates.filter((filePath) => !skipped.includes(filePath));
+  if (!accepted.length) throw unsupportedTypeError(skipped[0]);
   const jobs = [];
-  for (const filePath of candidates) {
-    if (!path.isAbsolute(filePath)) throw new Error('LOCAL_BATCH_PATH_INVALID');
-    const extension = path.extname(filePath).toLowerCase();
-    if (!ACCEPTED_EXTENSIONS.has(extension)) throw new Error(`LOCAL_DOCUMENT_TYPE_UNSUPPORTED:${path.basename(filePath)}`);
+  for (const filePath of accepted) {
     const stats = await fs.stat(filePath);
     if (!stats.isFile()) throw new Error(`LOCAL_BATCH_NOT_FILE:${path.basename(filePath)}`);
     jobs.push(batchQueue.enqueue(filePath, {
@@ -886,7 +884,7 @@ async function enqueueBatch(event, payload) {
       name: path.basename(filePath)
     }));
   }
-  return jobs.map(publicBatchJob);
+  return { jobs: jobs.map(publicBatchJob), skipped: skipped.map((filePath) => path.basename(filePath)) };
 }
 
 function listBatch(event) {

@@ -1976,13 +1976,24 @@ async function cancelBatchJob(id) {
   }
 }
 
+function normalizeEnqueue(response) {
+  if (Array.isArray(response)) return { jobs: response, skipped: [] };
+  return { jobs: response?.jobs || [], skipped: response?.skipped || [] };
+}
+
+function skippedNote(skipped) {
+  if (!skipped.length) return '';
+  const names = skipped.slice(0, 5).join('、') + (skipped.length > 5 ? ` 等 ${skipped.length} 个` : '');
+  return `；已跳过不支持的文件（图片等）：${names}`;
+}
+
 async function enqueueDroppedFiles(files) {
   if (!files?.length) return;
   try {
-    const jobs = await window.veilforge.enqueueDroppedFiles(files);
+    const { jobs, skipped } = normalizeEnqueue(await window.veilforge.enqueueDroppedFiles(files));
     for (const job of jobs) state.batchJobs.set(job.id, job);
     renderBatchJobs();
-    showToast(`已加入 ${jobs.length} 个后台任务`);
+    showToast(`已加入 ${jobs.length} 个后台任务${skippedNote(skipped)}`, skipped.length ? 'error' : undefined);
   } catch (error) {
     showToast(`批量导入失败：${friendlyError(error)}`, 'error');
   }
@@ -1990,12 +2001,12 @@ async function enqueueDroppedFiles(files) {
 
 async function pickBatchDocuments() {
   try {
-    const jobs = await window.veilforge.pickBatchDocuments();
-    if (!jobs?.length) return;
+    const { jobs, skipped } = normalizeEnqueue(await window.veilforge.pickBatchDocuments());
+    if (!jobs.length) return;
     for (const job of jobs) state.batchJobs.set(job.id, job);
     renderBatchJobs();
     setActiveModule('batch');
-    showToast(`已选择 ${jobs.length} 个文件，正在本机依次处理`);
+    showToast(`已选择 ${jobs.length} 个文件，正在本机依次处理${skippedNote(skipped)}`, skipped.length ? 'error' : undefined);
   } catch (error) {
     showToast(`批量选择失败：${friendlyError(error)}`, 'error');
   }
@@ -2077,7 +2088,7 @@ function reset() {
   elements.sourceEditor.value = '';
   elements.redactedEditor.value = '';
   elements.documentName.textContent = '未导入文档';
-  elements.documentMeta.textContent = '支持文档、图片 OCR 与多页 PDF 涂黑导出';
+  elements.documentMeta.textContent = '支持 Word、Excel、PDF、CSV、TXT（不支持图片）';
   elements.charCount.textContent = '0';
   elements.findingCount.textContent = '0';
   elements.enabledCount.textContent = '0';
