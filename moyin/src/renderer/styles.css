@@ -333,3 +333,17 @@ h1, h2, p { margin-top: 0; }
 .next-steps-list textarea { width: 100%; font-size: 12px; line-height: 1.6; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #faf9f5; resize: vertical; }
 .next-steps-actions { display: flex; gap: 8px; }
 .vault-entry-restore { white-space: nowrap; }
+
+/* 逆脱敏：查找记录与拖入返回文件 */
+.restore-entry-label { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.restore-entry-label strong { color: var(--ink); }
+.restore-finder { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+.restore-finder input { flex: 1 1 260px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.restore-search-results { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.restore-search-results button { font-size: 12px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; cursor: pointer; }
+.restore-search-results button:hover { border-color: var(--green); }
+.restore-search-results .muted { color: var(--muted); font-size: 12px; }
+.restore-drop { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 16px; margin-bottom: 10px; border: 1.5px dashed #c9c3b3; border-radius: 12px; background: #faf8f2; font-size: 12px; color: var(--muted); }
+.restore-drop.dragging { border-color: var(--green); background: #eef6f0; }
+.restore-file-state { color: var(--ink); font-weight: 650; }
+.restore-file-state.stale { color: #8a3f35; }

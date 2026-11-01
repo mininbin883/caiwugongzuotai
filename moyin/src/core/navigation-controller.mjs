@@ -32,12 +32,12 @@ export const MODULE_DEFINITIONS = Object.freeze({
   }),
   restore: Object.freeze({
     label: '逆脱敏',
-    kicker: '可逆工作流',
+    kicker: '导回并逆脱敏',
     title: '把 AI 返回内容中的代号换回原文',
-    description: '先在“加密仓库”中载入一条可逆记录，再粘贴 AI 返回内容。本页会报告缺失、未知和重复代号。',
-    status: '需要可逆记录',
-    action: '前往加密仓库',
-    checklist: Object.freeze(['从仓库载入可逆代号记录', '粘贴或编辑 AI 返回内容', '执行逆脱敏并核对完整性报告'])
+    description: '把 AI 返回的文件拖进来，墨隐按文件编号自动找到仓库里的记录，核对后下载与原文件相同格式的结果；也可以粘贴 AI 的回复。',
+    status: '导入返回件后自动按编号找到记录',
+    action: '导入 AI 返回的文件',
+    checklist: Object.freeze(['导入 AI 返回的文件，或粘贴它的回复', '自动按编号找到仓库记录并核对', '确认核对单后下载逆脱敏结果'])
   }),
   protect: Object.freeze({
     label: '保护设置',

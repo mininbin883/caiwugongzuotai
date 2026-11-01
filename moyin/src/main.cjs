@@ -80,7 +80,7 @@ const batchExportSessions = new Map();
 const pendingEncryptedDocuments = new Map();
 const sourceFileSessions = new Map();
 const vaultAttachmentSessions = new Map();
-const DEFAULT_VAULT_TIMEOUT_MINUTES = 5;
+const DEFAULT_VAULT_TIMEOUT_MINUTES = 30;
 const MIN_VAULT_TIMEOUT_MINUTES = 1;
 const MAX_VAULT_TIMEOUT_MINUTES = 60;
 const MAX_BATCH_FILES = 50;
@@ -1108,6 +1108,84 @@ async function saveExport(event, payload) {
   }
   await fs.writeFile(result.filePath, body, { encoding: 'utf8', flag: 'wx' });
   return { canceled: false, path: result.filePath, bytes: Buffer.byteLength(body, 'utf8'), ...registerVaultAttachmentBundle(event, payload, result.filePath) };
+}
+
+// ---------- 两步逆脱敏：先读入 AI 返回的文件（只读，不落盘），核对确认后再另存为 ----------
+const RESTORE_EXTENSIONS = ['docx', 'xlsx', 'csv', 'pdf', 'txt', 'md'];
+const restoreSessions = new Map();
+
+async function openReturnedDocument(event, payload) {
+  let inputPath = typeof payload?.path === 'string' ? payload.path : '';
+  if (!inputPath) {
+    const selected = await dialog.showOpenDialog({
+      title: '选择 AI 返回的文件',
+      properties: ['openFile'],
+      filters: [{ name: 'AI 返回的文件', extensions: RESTORE_EXTENSIONS }]
+    });
+    if (selected.canceled || !selected.filePaths[0]) return { canceled: true };
+    inputPath = selected.filePaths[0];
+  }
+  if (!path.isAbsolute(inputPath)) throw new Error('LOCAL_PATH_INVALID');
+  const kind = path.extname(inputPath).toLowerCase().slice(1);
+  if (!RESTORE_EXTENSIONS.includes(kind)) throw new Error('LOCAL_TYPE_UNSUPPORTED');
+  const stat = await fs.stat(inputPath);
+  if (!stat.isFile()) throw new Error('LOCAL_NOT_A_FILE');
+  let text;
+  if (kind === 'docx' || kind === 'xlsx') text = (await extractOfficeDocument(inputPath)).text;
+  else if (kind === 'csv') text = (await extractCsvDocument(inputPath)).text;
+  else text = (await extractDocument(inputPath)).text;
+  const token = randomUUID();
+  for (const [key, value] of restoreSessions) if (value.ownerId === event.sender.id) restoreSessions.delete(key);
+  restoreSessions.set(token, { path: inputPath, kind, ownerId: event.sender.id, createdAt: Date.now() });
+  return { canceled: false, token, kind, name: path.basename(inputPath), text, characters: text.length };
+}
+
+async function saveRestoredDocument(event, payload) {
+  const session = restoreSessions.get(String(payload?.token || ''));
+  const mapping = payload?.mapping;
+  if (!Array.isArray(mapping)) throw new Error('LOCAL_VAULT_MAPPING_INVALID');
+  const asText = !session || session.ownerId !== event.sender.id || payload?.asText === true;
+  const kind = asText ? 'txt' : session.kind === 'md' ? 'txt' : session.kind;
+  const sourceBase = session ? path.parse(session.path).name : String(payload?.nameHint || 'AI返回内容');
+  const base = sourceBase.replace(/-?脱敏副本$/u, '').replace(/-?脱敏$/u, '') || '逆脱敏结果';
+  const destination = await dialog.showSaveDialog({
+    title: '下载逆脱敏结果',
+    defaultPath: `${base}-逆脱敏.${kind}`,
+    filters: [{ name: kind === 'docx' ? 'Word 文档' : kind === 'xlsx' ? 'Excel 工作簿' : kind === 'csv' ? 'CSV 表格' : kind === 'pdf' ? 'PDF 文档' : 'UTF-8 文本', extensions: [kind] }]
+  });
+  if (destination.canceled || !destination.filePath) return { canceled: true };
+  const reversible = await loadReversibleEngine();
+  if (kind === 'txt') {
+    if (typeof payload?.text !== 'string') throw new Error('LOCAL_EXPORT_INVALID');
+    const report = reversible.restoreTokens(payload.text, mapping, { mode: 'analysis' });
+    if (Buffer.byteLength(report.restoredText, 'utf8') > EXPORT_LIMIT) throw new Error('LOCAL_EXPORT_TOO_LARGE');
+    await fs.writeFile(destination.filePath, report.restoredText, 'utf8');
+    return { canceled: false, path: destination.filePath, kind, restoredOccurrences: report.restoredCount };
+  }
+  if (kind === 'csv') {
+    const source = await extractCsvDocument(session.path);
+    const report = reversible.restoreTokens(source.text, mapping, { mode: 'rewrite' });
+    const rendered = await renderRedactedCsv(source.session, report.restoredText, destination.filePath, { sanitizeFormulas: false });
+    return { canceled: false, path: destination.filePath, kind, restoredOccurrences: report.restoredCount, ...rendered };
+  }
+  if (kind === 'pdf') {
+    let sidecarPath = `${session.path}.tokens.json`;
+    try {
+      await fs.access(sidecarPath);
+    } catch {
+      const sidecar = await dialog.showOpenDialog({
+        title: '选择导出时一起生成的 PDF 坐标副本（.tokens.json）',
+        properties: ['openFile'],
+        filters: [{ name: '墨隐 PDF 坐标副本', extensions: ['json'] }]
+      });
+      if (sidecar.canceled || !sidecar.filePaths[0]) return { canceled: true };
+      sidecarPath = sidecar.filePaths[0];
+    }
+    const restored = await restoreReversiblePdf(session.path, mapping, destination.filePath, sidecarPath);
+    return { canceled: false, path: destination.filePath, kind, ...restored };
+  }
+  const restored = await restoreReversibleOffice(session.path, mapping, destination.filePath);
+  return { canceled: false, path: destination.filePath, kind, ...restored };
 }
 
 async function restoreOfficeFromDialog(_event, payload) {
@@ -2440,6 +2518,8 @@ ipcMain.handle('veilforge:open-encrypted-pdf', guardWithEvent(openEncryptedDocum
 ipcMain.handle('veilforge:export', guardWithEvent(saveExport));
 ipcMain.handle('veilforge:ocr-correct', guardWithEvent(correctOcr));
 ipcMain.handle('veilforge:office-restore', guardWithEvent(restoreOfficeFromDialog));
+ipcMain.handle('veilforge:restore-open', guardWithEvent(openReturnedDocument));
+ipcMain.handle('veilforge:restore-save', guardWithEvent(saveRestoredDocument));
 ipcMain.handle('veilforge:batch-enqueue', guardWithEvent(enqueueBatch));
 ipcMain.handle('veilforge:batch-list', guardWithEvent(listBatch));
 ipcMain.handle('veilforge:batch-open', guardWithEvent(openBatchResult));

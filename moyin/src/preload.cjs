@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('veilforge', Object.freeze({
   exportResult: (payload) => ipcRenderer.invoke('veilforge:export', payload),
   correctOcr: (token, pageNumber, corrections) => ipcRenderer.invoke('veilforge:ocr-correct', { token, pageNumber, corrections }),
   restoreOffice: (mapping, sentText) => ipcRenderer.invoke('veilforge:office-restore', { mapping, sentText }),
+  openReturnedDocument: (file) => ipcRenderer.invoke('veilforge:restore-open', { path: file ? webUtils.getPathForFile(file) : '' }),
+  saveRestoredDocument: (payload) => ipcRenderer.invoke('veilforge:restore-save', payload),
   createVault: (password) => ipcRenderer.invoke('veilforge:vault-create', { password }),
   openVault: (password) => ipcRenderer.invoke('veilforge:vault-open', { password }),
   saveVaultEntry: (payload) => ipcRenderer.invoke('veilforge:vault-save', payload),

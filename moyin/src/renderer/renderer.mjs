@@ -21,6 +21,7 @@ const state = {
   style: 'token',
   unexported: false,
   lastExport: null,
+  restoreFile: null,
   enabledTypes: new Set(Object.keys(TYPE_LABELS)),
   image: null,
   imageMappingValid: false,
@@ -70,6 +71,7 @@ const elements = Object.fromEntries([
   'batchPanel', 'batchList', 'batchSummary', 'batchClearButton', 'batchExportButton', 'batchAutoVault',
   'restorePanel', 'restoreInput', 'restoreOutput', 'restoreMode', 'restoreButton', 'restoreExportButton', 'restoreOfficeButton', 'restoreReport',
   'restoreChecklist', 'restoreConfirm', 'restoreConfirmLabel', 'exportAuditBox',
+  'restoreEntryLabel', 'restoreSearch', 'restoreUnlockButton', 'restoreSearchResults', 'restoreDrop', 'restoreImportButton', 'restoreFileState',
   'exportBar', 'exportSummary', 'exportSummaryDetail', 'exportConfirm', 'exportPrimaryButton',
   'vaultGateDialog', 'vaultGateCreate', 'vaultGateOpen', 'vaultGateCancel',
   'nextStepsDialog', 'nextStepsTitle', 'nextStepsPath', 'nextStepsPrompt', 'nextStepsCopy', 'nextStepsDownload',
@@ -120,15 +122,13 @@ function renderModuleNavigation() {
     : active === 'vault'
       ? state.vault ? '仓库已解锁 · 密钥仅在内存' : '仓库已锁定'
       : active === 'restore'
-        ? state.restoreEntry?.mapping ? `${state.restoreEntry.mapping.length} 个映射已就绪` : '需要先从仓库载入可逆记录'
+        ? state.restoreEntry?.mapping ? `当前：${state.restoreEntry.fileNumber || ''} · ${state.restoreEntry.mapping.length} 个代号` : '导入返回件后自动按编号找到记录'
         : active === 'protect'
           ? `${state.enabledTypes.size} 类规则已启用`
           : definition.status;
   elements.modulePrimaryAction.textContent = active === 'vault' && state.vault
     ? '查看仓库记录'
-    : active === 'restore' && state.restoreEntry?.mapping
-      ? '定位到逆脱敏输入'
-      : definition.action;
+    : definition.action;
   elements.moduleChecklist.replaceChildren(...definition.checklist.map((text) => {
     const item = document.createElement('li');
     item.textContent = text;
@@ -163,11 +163,7 @@ async function runModulePrimaryAction() {
       else elements.vaultOpenButton.focus({ preventScroll: false });
       break;
     case 'restore':
-      if (state.restoreEntry?.mapping) elements.restoreInput.focus({ preventScroll: false });
-      else {
-        setActiveModule('vault');
-        showToast('请打开仓库，并选择一条“可逆”记录');
-      }
+      await importReturnedFile();
       break;
     case 'protect':
       elements.customTerms.focus({ preventScroll: false });
@@ -362,6 +358,7 @@ async function refreshVaultEntries({ append = false } = {}) {
 }
 
 function renderVaultState() {
+  renderRestoreState();
   const unlocked = Boolean(state.vault);
   if (!unlocked) {
     state.autoSaveToVault = false;
@@ -518,11 +515,12 @@ function clearRestoreSession() {
   elements.restoreChecklist.classList.add('hidden');
   elements.restoreConfirm.checked = false;
   elements.restoreConfirmLabel.classList.add('hidden');
-  elements.restorePanel.classList.add('hidden');
+  state.restoreFile = null;
+  renderRestoreState();
   updateModuleBadges();
 }
 
-async function loadVaultEntry(entryId) {
+async function loadVaultEntry(entryId, { keepInput = false } = {}) {
   if (!state.vault) return;
   try {
     const entry = await window.veilforge.readVaultEntry(state.vault.token, entryId);
@@ -557,22 +555,28 @@ async function loadVaultEntry(entryId) {
       elements.exportOcrTextButton.classList.add('hidden');
       elements.sourceEditor.value = entry.text;
       elements.redactedEditor.value = entry.text;
-      elements.restoreInput.value = entry.text;
+      if (!keepInput) {
+        elements.restoreInput.value = '';
+        state.restoreFile = null;
+      }
       elements.restoreOutput.value = '';
-      elements.restoreReport.textContent = '粘贴或编辑 AI 返回的含代号文本，然后开始逆脱敏。';
+      elements.restoreChecklist.replaceChildren();
+      elements.restoreChecklist.classList.add('hidden');
+      elements.restoreReport.textContent = keepInput
+        ? '已找到对应记录，正在核对…'
+        : '导入 AI 返回的文件，或粘贴 AI 的回复，然后点“开始逆脱敏”。';
       elements.restoreReport.classList.remove('needs-review');
       elements.restoreExportButton.disabled = true;
-      elements.restorePanel.classList.remove('hidden');
       renderTypes();
       renderVaultState();
       setActiveModule('restore');
-      showToast('可逆副本已载入，映射仅在解锁会话中使用');
-      return;
+      renderRestoreState();
+      if (!keepInput) showToast(`已选择 ${entry.fileNumber || ''} · ${entry.name}`);
+      return entry;
     }
     state.restoreEntry = null;
     state.restoreResult = null;
-    elements.restorePanel.classList.add('hidden');
-    state.sourceName = entry.name;
+      state.sourceName = entry.name;
     state.sourceText = entry.text;
     state.sourceToken = null;
     state.vaultAttachmentToken = null;
@@ -1250,7 +1254,6 @@ function applyDocumentResult(result, message = '文档已在本机解析完成')
   elements.emptyState.classList.add('hidden');
   elements.editorState.classList.remove('hidden');
   elements.findingsPanel.classList.remove('hidden');
-  elements.restorePanel.classList.add('hidden');
   elements.imagePreview.classList.toggle('hidden', !state.image);
   elements.exportImageButton.classList.toggle('hidden', !state.image);
   elements.exportOfficeButton.classList.toggle('hidden', !state.office);
@@ -1464,7 +1467,6 @@ function reset() {
   elements.exportCsvButton.classList.add('hidden');
   elements.exportOcrTextButton.classList.add('hidden');
   elements.pageControls.classList.add('hidden');
-  elements.restorePanel.classList.add('hidden');
   renderTypes();
   renderNerState();
   renderVaultState();
@@ -1795,7 +1797,10 @@ document.addEventListener('drop', (event) => {
   if (!event.dataTransfer.files?.length) return;
   event.preventDefault();
   document.body.classList.remove('drag-active');
-  enqueueDroppedFiles(event.dataTransfer.files);
+  elements.restoreDrop.classList.remove('dragging');
+  // 在“逆脱敏”页拖入的是 AI 返回的文件；其他页面仍加入批处理队列。
+  if (state.activeModule === 'restore') importReturnedFile(event.dataTransfer.files[0]);
+  else enqueueDroppedFiles(event.dataTransfer.files);
 });
 
 elements.batchClearButton.addEventListener('click', async () => {
@@ -2203,6 +2208,122 @@ window.veilforge.onVaultLocked((detail) => {
   renderVaultState();
   showToast('加密仓库已自动锁定，内存密钥已清除');
 });
+
+// ---------- 逆脱敏：找到记录、导入返回文件 ----------
+function renderRestoreState() {
+  if (!elements.restoreEntryLabel) return;
+  const entry = state.restoreEntry;
+  elements.restoreEntryLabel.replaceChildren();
+  if (entry?.mapping) {
+    elements.restoreEntryLabel.append('当前文件：');
+    const strong = document.createElement('strong');
+    strong.textContent = `${entry.fileNumber || ''} · ${entry.name || ''}`;
+    elements.restoreEntryLabel.append(strong, `（${entry.mapping.length} 个代号）`);
+  } else {
+    elements.restoreEntryLabel.textContent = '还没有选择文件：导入 AI 返回的文件会按编号自动找到对应记录，也可以在下面查找。';
+  }
+  elements.restoreUnlockButton.classList.toggle('hidden', Boolean(state.vault));
+  elements.restoreSearch.disabled = !state.vault;
+  elements.restoreSearch.placeholder = state.vault ? '或按文件编号、文件名查找，例如 000001' : '文件仓库已锁定，先解锁才能查找';
+  const file = state.restoreFile;
+  elements.restoreFileState.textContent = !file ? ''
+    : file.edited ? `已导入 ${file.name}，内容被手动修改过，将导出为 TXT`
+      : `已导入 ${file.name}${['docx', 'xlsx', 'csv', 'pdf'].includes(file.kind) ? `，将按原格式（${file.kind.toUpperCase()}）换回` : ''}`;
+  elements.restoreFileState.classList.toggle('stale', Boolean(file?.edited));
+  elements.restoreExportButton.textContent = file && !file.edited && ['docx', 'xlsx', 'csv', 'pdf'].includes(file.kind)
+    ? `下载逆脱敏结果（${file.kind.toUpperCase()}）` : '下载逆脱敏结果（TXT）';
+}
+
+async function ensureVaultUnlocked(reason) {
+  if (state.vault) return true;
+  showToast(reason || '需要先解锁文件仓库');
+  return openVaultFlow();
+}
+
+async function findVaultEntryByNumber(fileNumber) {
+  if (!state.vault) return null;
+  const local = state.vault.entries.find((entry) => entry.fileNumber === fileNumber);
+  if (local) return local;
+  const value = await window.veilforge.listVaultEntries(state.vault.token, {
+    pageSize: 5,
+    filters: { query: fileNumber, kind: 'reversible-map', dateFrom: '', dateTo: '' }
+  });
+  return value.entries.find((entry) => entry.fileNumber === fileNumber) || null;
+}
+
+function detectFileNumber(name, text) {
+  return String(name || '').match(/MI-\d{6}/u)?.[0] || String(text || '').slice(0, 800).match(/MI-\d{6}/u)?.[0] || '';
+}
+
+let restoreSearchTimer = 0;
+async function runRestoreSearch() {
+  const query = elements.restoreSearch.value.trim();
+  elements.restoreSearchResults.replaceChildren();
+  if (!state.vault || !query) return;
+  try {
+    const value = await window.veilforge.listVaultEntries(state.vault.token, {
+      pageSize: 8,
+      filters: { query, kind: 'reversible-map', dateFrom: '', dateTo: '' }
+    });
+    if (!value.entries.length) {
+      const empty = document.createElement('span');
+      empty.className = 'muted';
+      empty.textContent = '没有找到匹配的可逆记录';
+      elements.restoreSearchResults.append(empty);
+      return;
+    }
+    for (const entry of value.entries) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = `${entry.fileNumber} · ${entry.name}`;
+      button.addEventListener('click', async () => {
+        await loadVaultEntry(entry.id, { keepInput: true });
+        elements.restoreSearchResults.replaceChildren();
+        elements.restoreSearch.value = '';
+        if (elements.restoreInput.value.trim()) runRestore();
+      });
+      elements.restoreSearchResults.append(button);
+    }
+  } catch (error) {
+    showToast(`查找失败：${vaultErrorMessage(error)}`, 'error');
+  }
+}
+
+async function importReturnedFile(file = null) {
+  try {
+    const opened = await window.veilforge.openReturnedDocument(file);
+    if (!opened || opened.canceled) return;
+    state.restoreFile = { ...opened, edited: false };
+    elements.restoreInput.value = opened.text;
+    elements.restoreOutput.value = '';
+    state.restoreResult = null;
+    renderRestoreState();
+    const fileNumber = detectFileNumber(opened.name, opened.text);
+    if (fileNumber && state.restoreEntry?.fileNumber !== fileNumber) {
+      if (!(await ensureVaultUnlocked(`这是 ${fileNumber} 的返回件，请先解锁文件仓库`))) {
+        elements.restoreReport.textContent = `已认出编号 ${fileNumber}，解锁文件仓库后会自动载入对应记录。`;
+        return;
+      }
+      const entry = await findVaultEntryByNumber(fileNumber);
+      if (!entry) {
+        elements.restoreReport.textContent = `仓库里没有找到 ${fileNumber}。如果换过电脑，请先在“加密仓库”导入备份；也可以在上方手动查找。`;
+        renderRestoreState();
+        return;
+      }
+      await loadVaultEntry(entry.id, { keepInput: true });
+      showToast(`已按编号找到 ${fileNumber} · ${entry.name}`);
+    }
+    if (!state.restoreEntry?.mapping) {
+      elements.restoreReport.textContent = '没有认出文件编号，请在上方查找并选择对应的记录。';
+      if (!state.vault) renderRestoreState();
+      return;
+    }
+    runRestore();
+  } catch (error) {
+    showToast(`导入失败：${friendlyError(error)}`, 'error');
+  }
+}
+
 function selectRestoreRange(start, end) {
   const input = elements.restoreInput;
   input.focus();
@@ -2240,6 +2361,21 @@ function clipText(text, limit = 60) {
   return chars.length > limit ? `${chars.slice(0, limit).join('')}…` : chars.join('');
 }
 
+function formatFact(value, kind) {
+  const text = String(value);
+  if (kind === 'amount') {
+    const amount = text.match(/^(CNY|USD|EUR|HKD):(-?\d+(?:\.\d+)?)$/u);
+    if (amount) return `${Number(amount[2]).toLocaleString('zh-CN')} ${{ CNY: '元', USD: '美元', EUR: '欧元', HKD: '港元' }[amount[1]]}`;
+  }
+  if (kind === 'date') {
+    const date = text.match(/^(\*|\d{4})-(\d{1,2})(?:-(\d{1,2}))?$/u);
+    if (date) return `${date[1] === '*' ? '' : `${date[1]}年`}${date[2]}月${date[3] ? `${date[3]}日` : ''}`;
+  }
+  if (kind === 'percent') return `${text}%`;
+  if (kind === 'negation') return `${text} 处否定词`;
+  return text;
+}
+
 function renderRestoreChecklist(review, locatable = true) {
   const box = elements.restoreChecklist;
   const row = (parts, range) => checklistRow(parts, locatable ? range : null);
@@ -2259,7 +2395,7 @@ function renderRestoreChecklist(review, locatable = true) {
   if (review.changes.length) {
     section('事实发生变化，需要逐句核对', true);
     for (const change of review.changes.slice(0, 100)) {
-      const labels = change.diffs.map((diff) => `${diff.label}：${diff.before.join('、') || '无'} → ${diff.after.join('、') || '无'}`).join('；');
+      const labels = change.diffs.map((diff) => `${diff.label}：${diff.before.map((value) => formatFact(value, diff.kind)).join('、') || '无'} → ${diff.after.map((value) => formatFact(value, diff.kind)).join('、') || '无'}`).join('；');
       box.append(row([{ tag: 'code', text: clipText(change.returnedText) }, { className: 'muted', text: labels }], change));
     }
   }
@@ -2293,7 +2429,7 @@ function updateRestoreExportState() {
 
 elements.restoreConfirm.addEventListener('change', updateRestoreExportState);
 
-elements.restoreButton.addEventListener('click', () => {
+function runRestore() {
   if (!state.restoreEntry?.mapping) return;
   try {
     const result = restoreTokens(elements.restoreInput.value, state.restoreEntry.mapping, { mode: elements.restoreMode.value });
@@ -2302,7 +2438,10 @@ elements.restoreButton.addEventListener('click', () => {
     result.requiresReview = result.requiresReview || review.requiresReview;
     state.restoreResult = result;
     elements.restoreOutput.value = result.restoredText;
+    const nonce = state.restoreEntry.mapping[0]?.token?.slice(4, 12);
+    const foreignOnly = !result.restoredCount && /\[MI_[A-F0-9]{8}_/u.test(elements.restoreInput.value) && nonce && !elements.restoreInput.value.includes(`[MI_${nonce}_`);
     const parts = [`已恢复 ${result.restoredCount} 处`];
+    if (foreignOnly) parts.unshift('这份内容里的代号不属于当前文件，请确认选对了文件编号');
     if (result.missing.length) parts.push(`未出现代号 ${result.missing.length} 个`);
     if (result.unknownTokens.length) parts.push(`未知代号 ${result.unknownTokens.length} 个`);
     if (result.repeated.length) parts.push(`重复代号 ${result.repeated.length} 个`);
@@ -2318,19 +2457,40 @@ elements.restoreButton.addEventListener('click', () => {
   } catch (error) {
     showToast(`逆脱敏失败：${friendlyError(error)}`, 'error');
   }
+}
+elements.restoreButton.addEventListener('click', runRestore);
+elements.restoreImportButton.addEventListener('click', () => importReturnedFile());
+elements.restoreUnlockButton.addEventListener('click', async () => { if (await openVaultFlow()) renderRestoreState(); });
+elements.restoreSearch.addEventListener('input', () => {
+  window.clearTimeout(restoreSearchTimer);
+  restoreSearchTimer = window.setTimeout(runRestoreSearch, 250);
 });
+elements.restoreInput.addEventListener('input', () => {
+  if (state.restoreFile && !state.restoreFile.edited && elements.restoreInput.value !== state.restoreFile.text) {
+    state.restoreFile.edited = true;
+    renderRestoreState();
+  }
+});
+for (const eventName of ['dragenter', 'dragover']) {
+  elements.restoreDrop.addEventListener(eventName, (event) => { event.preventDefault(); elements.restoreDrop.classList.add('dragging'); });
+}
+elements.restoreDrop.addEventListener('dragleave', () => elements.restoreDrop.classList.remove('dragging'));
 elements.restoreExportButton.addEventListener('click', async () => {
-  if (!state.restoreResult?.restoredText) return;
+  if (!state.restoreResult?.restoredText || !state.restoreEntry?.mapping) return;
+  const file = state.restoreFile;
+  const originalFormat = Boolean(file && !file.edited && file.kind !== 'txt' && file.kind !== 'md');
   try {
-    const result = await window.veilforge.exportResult({
-      kind: 'txt',
-      sourceName: `${state.restoreEntry?.name || '逆脱敏结果'}.txt`,
-      text: state.restoreResult.restoredText,
-      findings: []
+    const result = await window.veilforge.saveRestoredDocument({
+      token: originalFormat ? file.token : null,
+      asText: !originalFormat,
+      mapping: state.restoreEntry.mapping,
+      text: elements.restoreInput.value,
+      nameHint: file?.name?.replace(/\.[^.]+$/u, '') || `${state.restoreEntry.fileNumber || ''}-${state.restoreEntry.name || 'AI返回内容'}`
     });
-    if (result && !result.canceled) showToast(`逆脱敏结果已导出 ${result.bytes.toLocaleString('zh-CN')} bytes`);
+    if (!result || result.canceled) return;
+    showToast(`逆脱敏结果已保存${originalFormat ? `（${String(result.kind).toUpperCase()} 原格式）` : ''}：${result.path}`);
   } catch (error) {
-    showToast(`导出失败：${friendlyError(error)}`, 'error');
+    showToast(`下载失败：${friendlyError(error)}`, 'error');
   }
 });
 elements.restoreOfficeButton.addEventListener('click', async () => {

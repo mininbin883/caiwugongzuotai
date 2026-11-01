@@ -137,9 +137,9 @@
             <label class="vault-timeout-label" for="vaultTimeout">自动锁定</label>
             <select id="vaultTimeout" class="vault-timeout">
               <option value="1">1 分钟</option>
-              <option value="5" selected>5 分钟</option>
+              <option value="5">5 分钟</option>
               <option value="15">15 分钟</option>
-              <option value="30">30 分钟</option>
+              <option value="30" selected>30 分钟</option>
               <option value="60">60 分钟</option>
             </select>
             <button id="vaultSaveButton" class="button button-accent button-small" disabled>保存当前脱敏结果</button>
@@ -312,35 +312,45 @@
           <textarea id="redactedEditor" class="document-editor hidden" spellcheck="false" readonly aria-label="脱敏预览"></textarea>
         </div>
 
-        <section id="restorePanel" class="restore-panel hidden module-hidden">
+        <section id="restorePanel" class="restore-panel module-hidden">
           <div class="restore-heading">
             <div>
-              <div class="section-kicker">可逆工作流</div>
-              <h2>逆脱敏</h2>
-              <p>映射只存在于当前已解锁的 AES 仓库会话中。</p>
+              <div class="section-kicker">导回并逆脱敏</div>
+              <h2>把 AI 返回的内容换回原文</h2>
+              <p id="restoreEntryLabel" class="restore-entry-label">还没有选择文件：导入 AI 返回的文件会按编号自动找到对应记录。</p>
             </div>
             <label>AI 做了什么？
               <select id="restoreMode">
-                <option value="analysis">分析、摘要或预测</option>
-                <option value="rewrite">整理或修改全文</option>
+                <option value="analysis">只做了分析、预测或摘要</option>
+                <option value="rewrite">整理或修改了全文</option>
               </select>
             </label>
           </div>
+          <div class="restore-finder">
+            <input id="restoreSearch" type="search" maxlength="80" placeholder="或按文件编号、文件名查找，例如 000001" aria-label="查找仓库记录">
+            <button id="restoreUnlockButton" type="button" class="button button-ghost button-small hidden">解锁文件仓库</button>
+            <div id="restoreSearchResults" class="restore-search-results"></div>
+          </div>
+          <div id="restoreDrop" class="restore-drop">
+            <span>把 AI 返回的文件拖到这里（Word / Excel / CSV / PDF / TXT），或</span>
+            <button id="restoreImportButton" type="button" class="button button-dark button-small">导入 AI 返回的文件</button>
+            <span id="restoreFileState" class="restore-file-state"></span>
+          </div>
           <div class="restore-grid">
-            <label>AI 返回的含代号内容
-              <textarea id="restoreInput" spellcheck="false" placeholder="粘贴 AI 返回的内容"></textarea>
+            <label>AI 返回的内容
+              <textarea id="restoreInput" spellcheck="false" placeholder="粘贴 AI 的回复；或在上方导入它返回的文件"></textarea>
             </label>
-            <label>逆脱敏结果
-              <textarea id="restoreOutput" spellcheck="false" readonly></textarea>
+            <label>逆脱敏结果预览
+              <textarea id="restoreOutput" spellcheck="false" readonly placeholder="点“开始逆脱敏”后，这里显示换回原文的结果"></textarea>
             </label>
           </div>
           <div id="restoreChecklist" class="restore-checklist hidden" aria-live="polite"></div>
           <div class="restore-actions">
-            <div id="restoreReport" class="restore-report">载入可逆仓库记录后开始。</div>
+            <div id="restoreReport" class="restore-report">先导入 AI 返回的文件，或选择一条记录后粘贴 AI 的回复。</div>
             <label id="restoreConfirmLabel" class="restore-confirm hidden"><input id="restoreConfirm" type="checkbox"> 我已逐项核对上面的核对单</label>
-            <button id="restoreButton" class="button button-dark">开始逆脱敏</button>
-            <button id="restoreExportButton" class="button button-accent" disabled>导出逆脱敏文本</button>
-            <button id="restoreOfficeButton" class="button button-ghost">原格式恢复 DOCX/XLSX/PDF/CSV</button>
+            <button id="restoreButton" class="button button-ghost">开始逆脱敏</button>
+            <button id="restoreExportButton" class="button button-accent" disabled>下载逆脱敏结果</button>
+            <button id="restoreOfficeButton" class="button button-ghost hidden">原格式恢复</button>
           </div>
         </section>
 
